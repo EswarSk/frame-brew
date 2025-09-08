@@ -319,3 +319,32 @@ function delay(ms: number): Promise<void> {
 
 
 
+
+
+// Public API wrapper for POST /api/generations
+export interface CreateGenerationPayload {
+  projectId: ID;
+  prompt: string;
+  stylePreset?: string;
+  durationSec: number;
+  captions?: boolean;
+  watermark?: boolean;
+}
+
+export async function createGeneration(
+  payload: CreateGenerationPayload
+): Promise<{ job: GenerationJob; video: Video }> {
+  const res = await fetch('/api/generations', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-mock': 'true',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `Request failed with status ${res.status}`);
+  }
+  return (await res.json()) as { job: GenerationJob; video: Video };
+}
