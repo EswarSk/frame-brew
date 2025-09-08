@@ -7,6 +7,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import Dashboard from "./pages/Dashboard";
 import Library from "./pages/Library";
 import NotFound from "./pages/NotFound";
+import GenerateDialog from "./components/GenerateDialog";
 
 const queryClient = new QueryClient();
 
@@ -17,6 +18,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <CommandPalette />
+        <GenerateDialog />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/dashboard" element={<Dashboard />} />
@@ -30,3 +32,4 @@ const App = () => (
 );
 
 export default App;
+
