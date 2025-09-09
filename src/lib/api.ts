@@ -239,6 +239,68 @@ export const api = {
     templates.push(newTemplate);
     return newTemplate;
   },
+
+  async updateTemplate(id: string, data: Partial<Template>): Promise<Template> {
+    await delay(500);
+    const index = templates.findIndex(t => t.id === id);
+    if (index === -1) throw new Error('Template not found');
+    templates[index] = { ...templates[index], ...data };
+    return templates[index];
+  },
+
+  async deleteTemplate(id: string): Promise<void> {
+    await delay(500);
+    const index = templates.findIndex(t => t.id === id);
+    if (index === -1) throw new Error('Template not found');
+    templates.splice(index, 1);
+  },
+
+  async completeUpload(data: { filename: string; projectId: string; duration: number }): Promise<{ video: Video }> {
+    await delay(1000);
+    const video: Video = {
+      id: `vid-${Date.now()}`,
+      orgId: 'org-1',
+      projectId: data.projectId,
+      title: data.filename.replace(/\.[^/.]+$/, ""),
+      status: 'ready',
+      sourceType: 'uploaded',
+      durationSec: Math.round(data.duration),
+      aspect: '9:16',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      urls: { mp4: '/placeholder.svg', thumb: '/placeholder.svg' },
+      version: 1,
+    };
+    videos.push(video);
+    return { video };
+  },
+
+  async rerenderVideo(id: string): Promise<{ job: any }> {
+    await delay(500);
+    return { job: { id: `job-${Date.now()}`, videoId: id, status: 'queued' } };
+  },
+
+  async duplicateAsTemplate(id: string): Promise<Template> {
+    await delay(500);
+    const video = videos.find(v => v.id === id);
+    if (!video) throw new Error('Video not found');
+    const template: Template = {
+      id: `tpl-${Date.now()}`,
+      orgId: 'org-1',
+      name: `${video.title} Template`,
+      prompt: `Generate a video similar to ${video.title}`,
+      createdAt: new Date().toISOString(),
+    };
+    templates.push(template);
+    return template;
+  },
+
+  async deleteVideo(id: string): Promise<void> {
+    await delay(500);
+    const index = videos.findIndex(v => v.id === id);
+    if (index === -1) throw new Error('Video not found');
+    videos.splice(index, 1);
+  },
 };
 
 // Simulate job status progression

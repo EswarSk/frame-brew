@@ -52,7 +52,8 @@ export interface Template {
   orgId: ID;
   name: string;
   prompt: string;
-  style?: Record<string, any>;
+  stylePreset?: string;
+  createdAt: string;
 }
 
 export interface Project {
