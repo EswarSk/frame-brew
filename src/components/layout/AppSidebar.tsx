@@ -83,7 +83,17 @@ const filterViews = [
 
 export function AppSidebar() {
   const { sidebarOpen, setSidebarOpen } = useUIStore();
-  const { setStatus, setMinScore, resetFilters } = useFilterStore();
+  const { 
+    setStatus, 
+    setMinScore, 
+    setSourceType, 
+    setProjectId, 
+    resetFilters,
+    status,
+    minScore,
+    sourceType,
+    projectId 
+  } = useFilterStore();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -97,13 +107,43 @@ export function AppSidebar() {
     
     if (view.value === "high-score") {
       setMinScore(80);
-    } else if (view.value === "generated" || view.value === "uploaded") {
-      // This would filter by source type in a real implementation
+    } else if (view.value === "generated") {
+      setSourceType('generated');
+    } else if (view.value === "uploaded") {
+      setSourceType('uploaded');
     } else if (view.value) {
       setStatus(view.value.split(','));
     }
     
     navigate('/library');
+  };
+
+  const handleProjectClick = (project: any) => {
+    resetFilters();
+    setProjectId(project.id);
+    navigate('/library');
+  };
+
+  // Helper to check if a filter view is currently active
+  const isViewActive = (view: typeof filterViews[0]) => {
+    if (location.pathname !== '/library') return false;
+    
+    if (view.value === "") {
+      return !status.length && !sourceType && !projectId && minScore === 0;
+    } else if (view.value === "high-score") {
+      return minScore >= 80;
+    } else if (view.value === "generated") {
+      return sourceType === 'generated';
+    } else if (view.value === "uploaded") {
+      return sourceType === 'uploaded';
+    } else {
+      return status.join(',') === view.value;
+    }
+  };
+
+  // Helper to check if a project is currently active
+  const isProjectActive = (project: any) => {
+    return location.pathname === '/library' && projectId === project.id;
   };
 
   if (!sidebarOpen) {
@@ -181,13 +221,10 @@ export function AppSidebar() {
             {projects.map((project) => (
               <Button
                 key={project.id}
-                variant="ghost"
+                variant={isProjectActive(project) ? "secondary" : "ghost"}
                 size="sm"
                 className="w-full justify-start text-sm"
-                onClick={() => {
-                  resetFilters();
-                  navigate('/library');
-                }}
+                onClick={() => handleProjectClick(project)}
               >
                 {project.name}
               </Button>
@@ -202,11 +239,12 @@ export function AppSidebar() {
             
             {filterViews.map((view) => {
               const Icon = view.icon;
+              const isActive = isViewActive(view);
               
               return (
                 <Button
                   key={view.value}
-                  variant="ghost"
+                  variant={isActive ? "secondary" : "ghost"}
                   size="sm"
                   className="w-full justify-start text-sm"
                   onClick={() => handleFilterView(view)}

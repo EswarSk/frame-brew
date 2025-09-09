@@ -13,7 +13,7 @@ import {
 
 // Mock data storage
 let videos: Video[] = [];
-let jobs: GenerationJob[] = [];
+const jobs: GenerationJob[] = [];
 let templates: Template[] = [];
 let projects: Project[] = [];
 
@@ -22,14 +22,20 @@ const initializeMockData = () => {
   if (projects.length === 0) {
     projects = [
       {
-        id: 'proj-1',
-        name: 'Marketing Campaign',
+        id: 'proj_default',
+        name: 'Personal Project',
         orgId: 'org-1',
         createdAt: new Date().toISOString(),
       },
       {
-        id: 'proj-2',
-        name: 'Product Demos',
+        id: 'proj_work',
+        name: 'Work Content',
+        orgId: 'org-1',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'proj_social',
+        name: 'Social Media',
         orgId: 'org-1',
         createdAt: new Date().toISOString(),
       },
@@ -56,7 +62,7 @@ const initializeMockData = () => {
       {
         id: 'vid-1',
         orgId: 'org-1',
-        projectId: 'proj-1',
+        projectId: 'proj_default',
         title: 'Summer Sale Announcement',
         status: 'ready',
         sourceType: 'generated',
@@ -85,18 +91,103 @@ const initializeMockData = () => {
       {
         id: 'vid-2',
         orgId: 'org-1',
-        projectId: 'proj-2',
+        projectId: 'proj_work',
         title: 'Product Demo v2',
         status: 'scoring',
         sourceType: 'generated',
         durationSec: 20,
         aspect: '9:16',
-        createdAt: new Date().toISOString(),
+        createdAt: new Date(Date.now() - 3600000).toISOString(),
         updatedAt: new Date().toISOString(),
         urls: {
           mp4: '/placeholder.svg',
           thumb: '/placeholder.svg',
         },
+        version: 1,
+      },
+      {
+        id: 'vid-3',
+        orgId: 'org-1',
+        projectId: 'proj_social',
+        title: 'Uploaded Content Video',
+        status: 'ready',
+        sourceType: 'uploaded',
+        durationSec: 15,
+        aspect: '9:16',
+        createdAt: new Date(Date.now() - 7200000).toISOString(),
+        updatedAt: new Date(Date.now() - 7200000).toISOString(),
+        urls: {
+          mp4: '/placeholder.svg',
+          thumb: '/placeholder.svg',
+        },
+        score: {
+          overall: 92,
+          hook: 95,
+          pacing: 88,
+          clarity: 90,
+          brandSafety: 98,
+          durationFit: 85,
+          visualQoe: 90,
+          audioQoe: 94,
+        },
+        feedbackSummary: 'Excellent video quality and engagement. Great pacing throughout.',
+        version: 1,
+      },
+      {
+        id: 'vid-4',
+        orgId: 'org-1',
+        projectId: 'proj_default',
+        title: 'Tutorial Walkthrough',
+        status: 'failed',
+        sourceType: 'generated',
+        durationSec: 30,
+        aspect: '9:16',
+        createdAt: new Date(Date.now() - 10800000).toISOString(),
+        updatedAt: new Date(Date.now() - 10800000).toISOString(),
+        urls: {},
+        version: 1,
+      },
+      {
+        id: 'vid-5',
+        orgId: 'org-1',
+        projectId: 'proj_work',
+        title: 'Company Introduction',
+        status: 'ready',
+        sourceType: 'uploaded',
+        durationSec: 28,
+        aspect: '9:16',
+        createdAt: new Date(Date.now() - 172800000).toISOString(),
+        updatedAt: new Date(Date.now() - 172800000).toISOString(),
+        urls: {
+          mp4: '/placeholder.svg',
+          thumb: '/placeholder.svg',
+          captions: '/placeholder.vtt',
+        },
+        score: {
+          overall: 78,
+          hook: 82,
+          pacing: 75,
+          clarity: 80,
+          brandSafety: 85,
+          durationFit: 70,
+          visualQoe: 76,
+          audioQoe: 82,
+        },
+        feedbackSummary: 'Good content but could benefit from better pacing and visual improvements.',
+        version: 1,
+      },
+      {
+        id: 'vid-6',
+        orgId: 'org-1',
+        projectId: 'proj_social',
+        title: 'Quick Tips Video',
+        status: 'running',
+        sourceType: 'generated',
+        durationSec: 12,
+        aspect: '9:16',
+        createdAt: new Date(Date.now() - 1800000).toISOString(),
+        updatedAt: new Date().toISOString(),
+        urls: {},
         version: 1,
       },
     ];
@@ -116,6 +207,8 @@ export const api = {
     status?: string[];
     minScore?: number;
     projectId?: string;
+    sourceType?: 'generated' | 'uploaded';
+    sortBy?: string;
     cursor?: string;
   }): Promise<VideosResponse> {
     initializeMockData();
@@ -139,6 +232,37 @@ export const api = {
 
     if (params.projectId) {
       filtered = filtered.filter((v) => v.projectId === params.projectId);
+    }
+
+    if (params.sourceType) {
+      filtered = filtered.filter((v) => v.sourceType === params.sourceType);
+    }
+
+    // Apply sorting
+    if (params.sortBy) {
+      switch (params.sortBy) {
+        case 'newest':
+          filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          break;
+        case 'oldest':
+          filtered.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          break;
+        case 'score-high':
+          filtered.sort((a, b) => (b.score?.overall || 0) - (a.score?.overall || 0));
+          break;
+        case 'score-low':
+          filtered.sort((a, b) => (a.score?.overall || 0) - (b.score?.overall || 0));
+          break;
+        case 'title-az':
+          filtered.sort((a, b) => a.title.localeCompare(b.title));
+          break;
+        default:
+          // Default to newest
+          filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
+    } else {
+      // Default sorting by newest
+      filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     }
 
     return {
@@ -275,9 +399,16 @@ export const api = {
     return { video };
   },
 
-  async rerenderVideo(id: string): Promise<{ job: any }> {
+  async rerenderVideo(id: string): Promise<{ job: GenerationJob }> {
     await delay(500);
-    return { job: { id: `job-${Date.now()}`, videoId: id, status: 'queued' } };
+    const job: GenerationJob = { 
+      id: `job-${Date.now()}`, 
+      videoId: id, 
+      prompt: 'Rerender job',
+      status: 'queued',
+      createdAt: new Date().toISOString()
+    };
+    return { job };
   },
 
   async duplicateAsTemplate(id: string): Promise<Template> {
@@ -361,13 +492,21 @@ function simulateJobProgression(jobId: ID, videoId: ID) {
 }
 
 // SSE event emitter (simplified for mock)
-let sseCallbacks: ((event: any) => void)[] = [];
+interface SSEEvent {
+  type: string;
+  jobId: string;
+  videoId: string;
+  status: Status;
+  video?: Video;
+}
 
-function emitSSEEvent(event: any) {
+let sseCallbacks: ((event: SSEEvent) => void)[] = [];
+
+function emitSSEEvent(event: SSEEvent) {
   sseCallbacks.forEach((callback) => callback(event));
 }
 
-export function subscribeToSSE(callback: (event: any) => void): () => void {
+export function subscribeToSSE(callback: (event: SSEEvent) => void): () => void {
   sseCallbacks.push(callback);
   return () => {
     sseCallbacks = sseCallbacks.filter((cb) => cb !== callback);

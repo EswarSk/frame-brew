@@ -39,7 +39,12 @@ export default function Library() {
     sortBy,
     setSortBy,
     minScore,
-    setMinScore
+    setMinScore,
+    sourceType,
+    setSourceType,
+    projectId,
+    setProjectId,
+    resetFilters
   } = useFilterStore();
   
   const { 
@@ -52,11 +57,14 @@ export default function Library() {
   const [showFilters, setShowFilters] = useState(false);
 
   const { data: videosResponse, isLoading } = useQuery({
-    queryKey: ['videos', { query, status, minScore, sortBy }],
+    queryKey: ['videos', { query, status, minScore, sortBy, sourceType, projectId }],
     queryFn: () => api.getVideos({ 
       query: query || undefined,
       status: status.length > 0 ? status : undefined,
       minScore: minScore > 0 ? minScore : undefined,
+      sourceType: sourceType || undefined,
+      projectId: projectId || undefined,
+      sortBy: sortBy || undefined,
     }),
   });
 
@@ -174,9 +182,37 @@ export default function Library() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">Library</h1>
-            <p className="text-muted-foreground">
-              {videos.length} videos • {selectedVideoIds.size} selected
-            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-muted-foreground">
+                {videos.length} videos • {selectedVideoIds.size} selected
+              </p>
+              {/* Active Filter Badges */}
+              {sourceType && (
+                <Badge variant="secondary" className="text-xs">
+                  {sourceType}
+                </Badge>
+              )}
+              {status.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  Status: {status.join(', ')}
+                </Badge>
+              )}
+              {projectId && (
+                <Badge variant="secondary" className="text-xs">
+                  Project: {projectId}
+                </Badge>
+              )}
+              {minScore > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  Score: {minScore}+
+                </Badge>
+              )}
+              {query && (
+                <Badge variant="secondary" className="text-xs">
+                  "{query}"
+                </Badge>
+              )}
+            </div>
           </div>
           
           {hasSelection && (
@@ -273,11 +309,7 @@ export default function Library() {
                 <div className="flex items-end gap-2">
                   <Button
                     variant="outline"
-                    onClick={() => {
-                      setQuery('');
-                      setStatus([]);
-                      setMinScore(0);
-                    }}
+                    onClick={resetFilters}
                   >
                     Clear Filters
                   </Button>

@@ -50,6 +50,8 @@ interface FilterStore {
   setStatus: (status: string[]) => void;
   projectId: string;
   setProjectId: (id: string) => void;
+  sourceType: 'generated' | 'uploaded' | '';
+  setSourceType: (type: 'generated' | 'uploaded' | '') => void;
   minScore: number;
   setMinScore: (score: number) => void;
   sortBy: string;
@@ -71,6 +73,8 @@ export const useFilterStore = create<FilterStore>()(
         setStatus: (status) => set({ status }),
         projectId: '',
         setProjectId: (id) => set({ projectId: id }),
+        sourceType: '',
+        setSourceType: (type) => set({ sourceType: type }),
         minScore: 0,
         setMinScore: (score) => set({ minScore: score }),
         sortBy: 'newest',
@@ -82,6 +86,7 @@ export const useFilterStore = create<FilterStore>()(
             query: '',
             status: [],
             projectId: '',
+            sourceType: '',
             minScore: 0,
             sortBy: 'newest',
             tags: [],
