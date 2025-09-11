@@ -1,0 +1,120 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String   // bcrypt hashed
+  role      String   @default("USER")
+  orgId     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@map("users")
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  settings  String?  // JSON string for additional org settings
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  projects  Project[]
+  videos    Video[]
+  templates Template[]
+
+  @@map("organizations")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  orgId       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  videos       Video[]
+
+  @@map("projects")
+}
+
+model Template {
+  id           String   @id @default(cuid())
+  name         String
+  prompt       String
+  stylePreset  String?
+  orgId        String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@map("templates")
+}
+
+model Video {
+  id              String      @id @default(cuid())
+  title           String
+  description     String?
+  orgId           String
+  projectId       String
+  status          String      @default("QUEUED")
+  sourceType      String
+  durationSec     Int?
+  aspect          String?     @default("9:16")
+  urls            String?     // JSON string for {mp4?, hls?, thumb?, captions?}
+  score           String?     // JSON string for score object with overall, hook, pacing, etc.
+  metadata        String?     // JSON string for additional metadata
+  feedbackSummary String?
+  version         Int         @default(1)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  jobs         GenerationJob[]
+
+  @@map("videos")
+}
+
+model GenerationJob {
+  id           String      @id @default(cuid())
+  videoId      String
+  prompt       String
+  stylePreset  String?
+  status       String      @default("QUEUED")
+  error        String?
+  progress     Int         @default(0) // 0-100
+  createdAt    DateTime    @default(now())
+  completedAt  DateTime?
+  updatedAt    DateTime    @updatedAt
+  
+  // Veo3 specific fields
+  negativePrompt String?
+  aspectRatio    String?    @default("16:9")
+  resolution     String?    @default("720p") 
+  model          String?    @default("fast")
+  operationName  String?    // Veo3 operation identifier
+  operationId    String?    // Veo3 operation ID
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@map("generation_jobs")
+}
+
