@@ -4,11 +4,11 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { 
-  LayoutDashboard, 
-  Library, 
-  FileVideo, 
-  Settings, 
+import {
+  LayoutDashboard,
+  Library,
+  FileVideo,
+  Settings,
   ChevronDown,
   Filter,
   Clock,
@@ -19,7 +19,8 @@ import {
   Plus,
   MoreHorizontal,
   Trash2,
-  Menu
+  Menu,
+  Edit3
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -42,6 +43,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useState } from "react";
+import { ProjectEditDialog } from "@/components/dialogs/ProjectEditDialog";
+import type { Project } from "@/lib/types";
 
 const navigationItems = [
   {
@@ -122,7 +125,17 @@ export function AppSidebar() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  // Auto-close sidebar on mobile after navigation
+  const handleNavigation = (href: string) => {
+    navigate(href);
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
+  };
   const [deleteProjectId, setDeleteProjectId] = useState<string | null>(null);
+  const [editProject, setEditProject] = useState<Project | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -153,7 +166,7 @@ export function AppSidebar() {
 
   const handleFilterView = (view: typeof filterViews[0]) => {
     resetFilters();
-    
+
     if (view.value === "high-score") {
       setMinScore(80);
     } else if (view.value === "generated") {
@@ -163,18 +176,29 @@ export function AppSidebar() {
     } else if (view.value) {
       setStatus(view.value.split(','));
     }
-    
+
     navigate('/library');
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
   };
 
   const handleProjectClick = (project: any) => {
     resetFilters();
     setProjectId(project.id);
     navigate('/library');
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
   };
 
   const handleDeleteProject = (projectId: string) => {
     setDeleteProjectId(projectId);
+  };
+
+  const handleEditProject = (project: Project) => {
+    setEditProject(project);
+    setEditDialogOpen(true);
   };
 
   const confirmDeleteProject = () => {
@@ -266,7 +290,7 @@ export function AppSidebar() {
                 key={item.href}
                 variant={isActive ? "secondary" : "ghost"}
                 className="w-full justify-start"
-                onClick={() => navigate(item.href)}
+                onClick={() => handleNavigation(item.href)}
               >
                 <Icon className="mr-2 h-4 w-4" />
                 {item.title}
@@ -332,6 +356,12 @@ export function AppSidebar() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem
+                        onClick={() => handleEditProject(project)}
+                      >
+                        <Edit3 className="mr-2 h-4 w-4" />
+                        Edit project
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
                         onClick={() => handleDeleteProject(project.id)}
                         className="text-destructive focus:text-destructive"
                       >
@@ -394,6 +424,13 @@ export function AppSidebar() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Edit Project Dialog */}
+      <ProjectEditDialog
+        project={editProject}
+        open={editDialogOpen}
+        onOpenChange={setEditDialogOpen}
+      />
     </div>
   );
 }

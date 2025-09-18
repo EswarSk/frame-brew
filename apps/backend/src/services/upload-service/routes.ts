@@ -9,7 +9,7 @@ import type { UploadResponse, ProcessedUpload } from '../../shared/types';
 
 const router = Router();
 
-// Configure multer for file uploads (memory storage for direct S3 upload)
+// Configure multer for file uploads (memory storage for cloud storage upload)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -39,7 +39,7 @@ const upload = multer({
 // All routes require authentication
 router.use(requireAuth);
 
-// Upload single video file
+// Upload a single video file
 router.post('/video', upload.single('video'), async (req, res) => {
   try {
     const orgId = req.user.orgId;
@@ -79,7 +79,7 @@ router.post('/video', upload.single('video'), async (req, res) => {
       userId: req.user.userId,
     });
 
-    // Upload to S3
+    // Upload to cloud storage
     const uploadResult = await UploadService.uploadVideo({
       file: file.buffer,
       fileName,
@@ -97,15 +97,15 @@ router.post('/video', upload.single('video'), async (req, res) => {
         projectId: projectId || null,
         status: 'PROCESSING',
         sourceType: 'UPLOADED',
-        urls: {
+        urls: JSON.stringify({
           original: uploadResult.url,
-        },
-        metadata: {
+        }),
+        metadata: JSON.stringify({
           originalName: file.originalname,
           fileSize: file.size,
           mimeType: file.mimetype,
           uploadId: uploadResult.uploadId,
-        },
+        }),
       },
       include: {
         project: true,
@@ -216,15 +216,15 @@ router.post('/videos/batch', upload.array('videos', 10), async (req, res) => {
             projectId: projectId || null,
             status: 'PROCESSING',
             sourceType: 'UPLOADED',
-            urls: {
+            urls: JSON.stringify({
               original: uploadResult.url,
-            },
-            metadata: {
+            }),
+            metadata: JSON.stringify({
               originalName: file.originalname,
               fileSize: file.size,
               mimeType: file.mimetype,
               uploadId: uploadResult.uploadId,
-            },
+            }),
           },
           include: {
             project: true,
@@ -292,8 +292,7 @@ router.get('/progress/:uploadId', async (req, res) => {
       where: {
         orgId,
         metadata: {
-          path: ['uploadId'],
-          equals: uploadId,
+          contains: uploadId,
         },
       },
     });
@@ -334,8 +333,7 @@ router.post('/cancel/:uploadId', async (req, res) => {
       where: {
         orgId,
         metadata: {
-          path: ['uploadId'],
-          equals: uploadId,
+          contains: uploadId,
         },
       },
     });
@@ -374,7 +372,7 @@ router.post('/cancel/:uploadId', async (req, res) => {
   }
 });
 
-// Generate presigned URL for direct S3 upload (alternative approach)
+// Generate presigned URL for direct cloud storage upload (alternative approach)
 router.post('/presigned-url', async (req, res) => {
   try {
     const { fileName, fileSize, mimeType } = req.body;

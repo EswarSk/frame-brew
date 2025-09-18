@@ -55,17 +55,34 @@ interface ScoringJobData {
   orgId: string;
 }
 
-// Create queues
-const generationQueue = new Bull('video-generation', redisConfig);
-const pollingQueue = new Bull('video-polling', redisConfig);
-const downloadQueue = new Bull('video-download', redisConfig);
-const scoringQueue = new Bull('video-scoring', redisConfig);
+// Conditionally create queues - skip Redis in development
+const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.REDIS_HOST;
+
+let generationQueue: Bull.Queue | null = null;
+let pollingQueue: Bull.Queue | null = null;
+let downloadQueue: Bull.Queue | null = null;
+let scoringQueue: Bull.Queue | null = null;
+
+if (!isDevelopment) {
+  try {
+    generationQueue = new Bull('video-generation', redisConfig);
+    pollingQueue = new Bull('video-polling', redisConfig);
+    downloadQueue = new Bull('video-download', redisConfig);
+    scoringQueue = new Bull('video-scoring', redisConfig);
+    
+    logger.info('Bull queues initialized with Redis');
+  } catch (error) {
+    logger.error('Failed to initialize Bull queues, falling back to development mode', { error: error.message });
+  }
+} else {
+  logger.info('Running in development mode - skipping Redis queue initialization');
+}
 
 export class GenerationQueue {
   static async addJob(data: GenerationJobData): Promise<Bull.Job> {
     try {
       // In development, skip Redis and return a mock job
-      if (process.env.NODE_ENV === 'development' || !process.env.REDIS_HOST) {
+      if (isDevelopment || !generationQueue) {
         logger.info('Mock: Generation job added to queue', { jobId: data.jobId });
         
         // Simulate job processing in the background
@@ -111,7 +128,7 @@ export class GenerationQueue {
 
   private static async processMockJob(data: GenerationJobData): Promise<void> {
     try {
-      logger.info('Mock: Processing generation job', { jobId: data.jobId });
+      logger.info('Development: Processing real Veo3 generation job', { jobId: data.jobId });
 
       // Update job status to running
       await db.generationJob.update({
@@ -119,7 +136,7 @@ export class GenerationQueue {
         data: { status: 'RUNNING', progress: 10 },
       });
 
-      // Simulate processing steps with delays
+      // Step 1: Start Veo3 generation using real AI service
       await new Promise(resolve => setTimeout(resolve, 1000));
       await db.generationJob.update({
         where: { id: data.jobId },
@@ -144,7 +161,7 @@ export class GenerationQueue {
         image: data.image,
       });
 
-      // If generation started successfully, update job with operation details
+      // If generation started successfully, poll directly using Veo3 pattern
       if (generationResult.operationName) {
         await db.generationJob.update({
           where: { id: data.jobId },
@@ -161,23 +178,115 @@ export class GenerationQueue {
           data: { status: 'POLLING' },
         });
 
-        // Start polling job
-        await this.addPollingJob({
-          jobId: data.jobId,
-          videoId: data.videoId,
-          operationName: generationResult.operationName,
-          operationId: generationResult.operationId,
-          orgId: data.orgId,
-        });
-
+        // Step 2: Poll the operation status until the video is ready (Veo3 pattern)
+        let operation = { name: generationResult.operationName, done: false };
+        let pollCount = 0;
+        const maxPolls = 60; // 10 minutes max
+        
+        logger.info('Development: Starting Veo3 polling...', { operationName: generationResult.operationName });
+        
+        while (!operation.done && pollCount < maxPolls) {
+          logger.info('Development: Waiting for video generation to complete...', { pollCount, operationName: generationResult.operationName });
+          
+          // Wait 10 seconds between polls (as per Veo3 documentation)
+          await new Promise((resolve) => setTimeout(resolve, 10000));
+          
+          // Get updated operation status
+          const pollResult = await AIGenerationService.pollGenerationStatus(generationResult.operationName);
+          operation.done = pollResult.status === 'completed' || pollResult.status === 'failed';
+          
+          // Update progress
+          const progress = 20 + (pollCount / maxPolls) * 60; // 20% to 80%
+          await db.generationJob.update({
+            where: { id: data.jobId },
+            data: { progress: Math.round(progress) },
+          });
+          
+          if (pollResult.status === 'completed' && pollResult.videoUrl) {
+            // Step 3: Download the video
+            logger.info('Development: Video generation completed, downloading...', { 
+              videoFile: typeof pollResult.videoUrl === 'string' ? pollResult.videoUrl : '[File Reference]'
+            });
+            
+            await db.generationJob.update({
+              where: { id: data.jobId },
+              data: { status: 'DOWNLOADING', progress: 85 },
+            });
+            
+            // Download and store video locally using the file reference (not URL)
+            const storedVideoUrl = await AIGenerationService.downloadAndStoreVideo(data.videoId, pollResult.videoUrl);
+            
+            // Step 4: Process video (generate thumbnails, etc.)
+            /*await db.generationJob.update({
+              where: { id: data.jobId },
+              data: { status: 'TRANSCODING', progress: 90 },
+            });
+            
+            const processedVideo = await AIGenerationService.processVideo({
+              id: data.videoId,
+              url: storedVideoUrl,
+              duration: 8, // Veo3 generates 8-second videos
+              status: 'completed',
+              metadata: {
+                prompt: data.prompt,
+                stylePreset: data.stylePreset,
+                resolution: data.resolution === '720p' ? '1280x720' : '1920x1080',
+                aspectRatio: data.aspectRatio,
+                model: data.model,
+                negativePrompt: data.negativePrompt,
+              },
+            }, {
+              captions: data.captions,
+              watermark: data.watermark,
+            });*/
+            
+            // Step 5: Complete the job
+            await db.video.update({
+              where: { id: data.videoId },
+              data: {
+                status: 'READY',
+                urls: JSON.stringify({
+                  mp4: storedVideoUrl
+                }),
+                metadata: JSON.stringify({}),
+              },
+            });
+            
+            await db.generationJob.update({
+              where: { id: data.jobId },
+              data: {
+                status: 'READY',
+                progress: 100,
+                completedAt: new Date(),
+              },
+            });
+            
+            logger.info('Development: Veo3 video generation completed successfully!', { 
+              jobId: data.jobId,
+              videoId: data.videoId,
+              videoUrl: storedVideoUrl 
+            });
+            
+            return;
+          } else if (pollResult.status === 'failed') {
+            throw new Error(pollResult.error || 'Veo3 generation failed');
+          }
+          
+          pollCount++;
+        }
+        
+        if (pollCount >= maxPolls) {
+          throw new Error('Veo3 generation timed out after 10 minutes');
+        }
+        
         return;
       }
 
       // Fallback to mock for testing
       const mockVideoData = {
         urls: {
-          mp4: `https://placeholder.com/video/${data.videoId}.mp4`,
-          thumbnail: `https://placeholder.com/thumbnail/${data.videoId}.jpg`,
+          mp4: `/api/files/videos/${data.videoId}/video.mp4`,
+          thumbnail: `/api/files/videos/${data.videoId}/thumbnail.jpg`,
         },
         metadata: {
           duration: data.durationSec,
@@ -191,8 +300,8 @@ export class GenerationQueue {
         where: { id: data.videoId },
         data: {
           status: 'READY',
-          urls: mockVideoData.urls,
-          metadata: mockVideoData.metadata,
+          urls: JSON.stringify(mockVideoData.urls),
+          metadata: JSON.stringify(mockVideoData.metadata),
         },
       });
 
@@ -234,7 +343,7 @@ export class GenerationQueue {
   static async addPollingJob(data: PollingJobData): Promise<Bull.Job> {
     try {
       // In development, skip Redis and return a mock job
-      if (process.env.NODE_ENV === 'development' || !process.env.REDIS_HOST) {
+      if (isDevelopment || !generationQueue) {
         logger.info('Mock: Polling job added to queue', { jobId: data.jobId });
         
         // Simulate polling in the background
@@ -325,7 +434,7 @@ export class GenerationQueue {
   static async addDownloadJob(data: DownloadJobData): Promise<Bull.Job> {
     try {
       // In development, skip Redis and return a mock job
-      if (process.env.NODE_ENV === 'development' || !process.env.REDIS_HOST) {
+      if (isDevelopment || !generationQueue) {
         logger.info('Mock: Download job added to queue', { jobId: data.jobId });
         
         // Simulate download in the background
@@ -388,9 +497,9 @@ export class GenerationQueue {
       
       // Mock successful storage - create final URLs
       const finalUrls = {
-        mp4: `https://frame-brew-dev.s3.amazonaws.com/videos/${data.videoId}/veo3-generated.mp4`,
-        thumbnail: `https://frame-brew-dev.s3.amazonaws.com/videos/${data.videoId}/thumbnail.jpg`,
-        hls: `https://frame-brew-dev.s3.amazonaws.com/videos/${data.videoId}/playlist.m3u8`,
+        mp4: `/api/files/videos/${data.videoId}/video.mp4`,
+        thumbnail: `/api/files/videos/${data.videoId}/thumbnail.jpg`,
+        hls: `/api/files/videos/${data.videoId}/playlist.m3u8`,
       };
 
       const metadata = {
@@ -405,8 +514,8 @@ export class GenerationQueue {
         where: { id: data.videoId },
         data: {
           status: 'TRANSCODING',
-          urls: finalUrls,
-          metadata,
+          urls: JSON.stringify(finalUrls),
+          metadata: JSON.stringify(metadata),
         },
       });
 
@@ -452,6 +561,28 @@ export class GenerationQueue {
 
   static async addScoringJob(data: ScoringJobData): Promise<Bull.Job> {
     try {
+      // In development, skip Redis and process scoring directly
+      if (isDevelopment || !scoringQueue) {
+        logger.info('Development: Processing scoring job directly', { videoId: data.videoId });
+        
+        // Process scoring immediately in development
+        setTimeout(async () => {
+          try {
+            await this.processScoring(data);
+          } catch (error) {
+            logger.error('Development scoring processing failed', { error, videoId: data.videoId });
+          }
+        }, 1000); // Process after 1 second
+        
+        // Return a mock job object
+        return {
+          id: `scoring-${data.videoId}`,
+          data,
+          opts: {},
+          progress: 0,
+        } as any;
+      }
+
       const job = await scoringQueue.add('score-video', data, {
         attempts: 2,
         backoff: {
@@ -471,6 +602,51 @@ export class GenerationQueue {
     } catch (error) {
       logger.error('Failed to add scoring job to queue', { error, data });
       throw error;
+    }
+  }
+
+  private static async processScoring(data: ScoringJobData): Promise<void> {
+    try {
+      logger.info('Development: Processing video scoring', { videoId: data.videoId });
+
+      // Use the existing video scoring logic
+      const video = await db.video.findUnique({
+        where: { id: data.videoId, orgId: data.orgId },
+      });
+
+      if (!video || !video.urls) {
+        throw new Error('Video not found or has no URLs');
+      }
+
+      // Parse URLs from JSON string
+      const urls = typeof video.urls === 'string' ? JSON.parse(video.urls) : video.urls;
+      
+      if (!urls.mp4) {
+        throw new Error('Video has no MP4 URL');
+      }
+
+      // Score the video using VideoScoringService
+      const VideoScoringService = require('./scoring-service');
+      const score = await VideoScoringService.scoreVideo(urls.mp4);
+
+      // Update video with new score
+      await db.video.update({
+        where: { id: data.videoId },
+        data: {
+          status: 'READY',
+          score: JSON.stringify(score),
+        },
+      });
+
+      logger.info('Development: Video scoring completed', { videoId: data.videoId, score });
+    } catch (error) {
+      logger.error('Development scoring failed', { error, videoId: data.videoId });
+      
+      // Set video back to ready status even if scoring fails
+      await db.video.update({
+        where: { id: data.videoId },
+        data: { status: 'READY' },
+      });
     }
   }
 
@@ -559,8 +735,9 @@ export class GenerationQueue {
   }
 }
 
-// Generation Queue Processing
-generationQueue.process('generate-video', 5, async (job: Bull.Job) => {
+// Generation Queue Processing - only setup if queues exist
+if (generationQueue) {
+  generationQueue.process('generate-video', 5, async (job: Bull.Job) => {
   const { jobId, videoId, prompt, stylePreset, durationSec, captions, watermark, orgId } = job.data;
   
   logger.info('Processing generation job', { jobId, videoId });
@@ -616,6 +793,10 @@ generationQueue.process('generate-video', 5, async (job: Bull.Job) => {
       veo3Result = await AIGenerationService.pollGenerationStatus(generationResult.operationName);
       
       if (veo3Result.status === 'completed' && veo3Result.videoUrl) {
+        logger.debug('Veo3 generation completed', { 
+          operationName: generationResult.operationName,
+          videoFileType: typeof veo3Result.videoUrl
+        });
         break;
       } else if (veo3Result.status === 'failed') {
         throw new Error(veo3Result.error || 'Veo3 generation failed');
@@ -640,6 +821,7 @@ generationQueue.process('generate-video', 5, async (job: Bull.Job) => {
       id: videoId,
       url: storedVideoUrl,
       duration: 8, // Veo3 generates 8-second videos
+      status: 'completed',
       metadata: {
         prompt,
         stylePreset,
@@ -667,9 +849,9 @@ generationQueue.process('generate-video', 5, async (job: Bull.Job) => {
         where: { id: videoId },
         data: {
           status: 'READY',
-          urls: processedVideo.urls,
-          metadata: processedVideo.metadata,
-          score,
+          urls: JSON.stringify(processedVideo.urls),
+          metadata: JSON.stringify(processedVideo.metadata),
+          score: JSON.stringify(score),
         },
       });
 
@@ -709,9 +891,11 @@ generationQueue.process('generate-video', 5, async (job: Bull.Job) => {
     throw error;
   }
 });
+}
 
 // Polling Queue Processing
-pollingQueue.process('poll-generation', 3, async (job: Bull.Job) => {
+if (pollingQueue) {
+  pollingQueue.process('poll-generation', 3, async (job: Bull.Job) => {
   const { jobId, videoId, operationName, operationId, orgId } = job.data;
   
   logger.info('Processing polling job', { jobId, operationName });
@@ -772,9 +956,11 @@ pollingQueue.process('poll-generation', 3, async (job: Bull.Job) => {
     throw error;
   }
 });
+}
 
 // Download Queue Processing
-downloadQueue.process('download-video', 3, async (job: Bull.Job) => {
+if (downloadQueue) {
+  downloadQueue.process('download-video', 3, async (job: Bull.Job) => {
   const { jobId, videoId, videoUrl, orgId } = job.data;
   
   logger.info('Processing download job', { jobId, videoUrl });
@@ -795,9 +981,10 @@ downloadQueue.process('download-video', 3, async (job: Bull.Job) => {
       id: videoId,
       url: storedVideoUrl,
       duration: 8, // Veo3 generates 8-second videos
+      status: 'completed',
       metadata: {
-        source: 'veo3',
-        originalUrl: videoUrl,
+        prompt: 'Veo3 generated video',
+        resolution: '1280x720',
       },
     }, {
       captions: false, // TODO: Get from job data
@@ -813,8 +1000,8 @@ downloadQueue.process('download-video', 3, async (job: Bull.Job) => {
         where: { id: videoId },
         data: {
           status: 'TRANSCODING',
-          urls: processedVideo.urls,
-          metadata: processedVideo.metadata,
+          urls: JSON.stringify(processedVideo.urls),
+          metadata: JSON.stringify(processedVideo.metadata),
         },
       });
 
@@ -857,9 +1044,11 @@ downloadQueue.process('download-video', 3, async (job: Bull.Job) => {
     throw error;
   }
 });
+}
 
 // Scoring Queue Processing
-scoringQueue.process('score-video', 3, async (job: Bull.Job) => {
+if (scoringQueue) {
+  scoringQueue.process('score-video', 3, async (job: Bull.Job) => {
   const { videoId, orgId } = job.data;
   
   logger.info('Processing scoring job', { videoId });
@@ -869,19 +1058,26 @@ scoringQueue.process('score-video', 3, async (job: Bull.Job) => {
       where: { id: videoId, orgId },
     });
 
-    if (!video || !video.urls || !video.urls.mp4) {
-      throw new Error('Video not found or has no MP4 URL');
+    if (!video || !video.urls) {
+      throw new Error('Video not found or has no URLs');
+    }
+
+    // Parse URLs from JSON string
+    const urls = typeof video.urls === 'string' ? JSON.parse(video.urls) : video.urls;
+    
+    if (!urls.mp4) {
+      throw new Error('Video has no MP4 URL');
     }
 
     // Score the video
-    const score = await VideoScoringService.scoreVideo(video.urls.mp4);
+    const score = await VideoScoringService.scoreVideo(urls.mp4);
 
     // Update video with new score
     await db.video.update({
       where: { id: videoId },
       data: {
         status: 'READY',
-        score,
+        score: JSON.stringify(score),
       },
     });
 
@@ -900,6 +1096,7 @@ scoringQueue.process('score-video', 3, async (job: Bull.Job) => {
     throw error;
   }
 });
+}
 
 // Helper function to update job status
 async function updateJobStatus(
@@ -934,7 +1131,8 @@ async function updateJobStatus(
 }
 
 // Queue event handlers
-generationQueue.on('completed', (job, result) => {
+if (generationQueue) {
+  generationQueue.on('completed', (job, result) => {
   logger.info('Generation job completed', { 
     queueJobId: job.id,
     jobId: job.data.jobId,
@@ -942,22 +1140,24 @@ generationQueue.on('completed', (job, result) => {
   });
 });
 
-generationQueue.on('failed', (job, err) => {
-  logger.error('Generation job failed', { 
-    queueJobId: job.id,
-    jobId: job.data?.jobId,
-    error: err.message 
+  generationQueue.on('failed', (job, err) => {
+    logger.error('Generation job failed', { 
+      queueJobId: job.id,
+      jobId: job.data?.jobId,
+      error: err.message 
+    });
   });
-});
 
-generationQueue.on('stalled', (job) => {
-  logger.warn('Generation job stalled', { 
-    queueJobId: job.id,
-    jobId: job.data?.jobId 
+  generationQueue.on('stalled', (job) => {
+    logger.warn('Generation job stalled', { 
+      queueJobId: job.id,
+      jobId: job.data?.jobId 
+    });
   });
-});
+}
 
-scoringQueue.on('completed', (job, result) => {
+if (scoringQueue) {
+  scoringQueue.on('completed', (job, result) => {
   logger.info('Scoring job completed', { 
     queueJobId: job.id,
     videoId: job.data.videoId,
@@ -965,16 +1165,18 @@ scoringQueue.on('completed', (job, result) => {
   });
 });
 
-scoringQueue.on('failed', (job, err) => {
-  logger.error('Scoring job failed', { 
-    queueJobId: job.id,
-    videoId: job.data?.videoId,
-    error: err.message 
+  scoringQueue.on('failed', (job, err) => {
+    logger.error('Scoring job failed', { 
+      queueJobId: job.id,
+      videoId: job.data?.videoId,
+      error: err.message 
+    });
   });
-});
+}
 
 // Add event handlers for new queues
-pollingQueue.on('completed', (job, result) => {
+if (pollingQueue) {
+  pollingQueue.on('completed', (job, result) => {
   logger.info('Polling job completed', { 
     queueJobId: job.id,
     jobId: job.data.jobId,
@@ -982,15 +1184,17 @@ pollingQueue.on('completed', (job, result) => {
   });
 });
 
-pollingQueue.on('failed', (job, err) => {
-  logger.error('Polling job failed', { 
-    queueJobId: job.id,
-    jobId: job.data?.jobId,
-    error: err.message 
+  pollingQueue.on('failed', (job, err) => {
+    logger.error('Polling job failed', { 
+      queueJobId: job.id,
+      jobId: job.data?.jobId,
+      error: err.message 
+    });
   });
-});
+}
 
-downloadQueue.on('completed', (job, result) => {
+if (downloadQueue) {
+  downloadQueue.on('completed', (job, result) => {
   logger.info('Download job completed', { 
     queueJobId: job.id,
     jobId: job.data.jobId,
@@ -998,21 +1202,22 @@ downloadQueue.on('completed', (job, result) => {
   });
 });
 
-downloadQueue.on('failed', (job, err) => {
-  logger.error('Download job failed', { 
-    queueJobId: job.id,
-    jobId: job.data?.jobId,
-    error: err.message 
+  downloadQueue.on('failed', (job, err) => {
+    logger.error('Download job failed', { 
+      queueJobId: job.id,
+      jobId: job.data?.jobId,
+      error: err.message 
+    });
   });
-});
+}
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('Shutting down queues...');
-  await generationQueue.close();
-  await pollingQueue.close();
-  await downloadQueue.close();
-  await scoringQueue.close();
+  if (generationQueue) await generationQueue.close();
+  if (pollingQueue) await pollingQueue.close();
+  if (downloadQueue) await downloadQueue.close();
+  if (scoringQueue) await scoringQueue.close();
 });
 
 export { generationQueue, pollingQueue, downloadQueue, scoringQueue };

@@ -15,6 +15,7 @@ import authRoutes from './services/api-gateway/auth';
 import videoRoutes from './services/video-service/routes';
 import uploadRoutes from './services/upload-service/routes';
 import generationRoutes from './services/generation-service/routes';
+import fileRoutes from './services/file-service/routes';
 import { handleSSEConnection } from './services/events/sse';
 
 const app = express();
@@ -82,6 +83,8 @@ app.get('/api/events', handleSSEConnection);
 
 // API Routes
 app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/files', fileRoutes); // File serving for local storage (no auth required)
+app.use('/', fileRoutes); // Handle all file serving routes (/uploads/*, /generated/*, /processed/*)
 app.use('/api', videoRoutes); // Video service handles /videos, /projects, /templates
 app.use('/api/upload', uploadRoutes);
 app.use('/api/generation', generationRoutes);

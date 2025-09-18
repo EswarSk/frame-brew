@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { useQuery } from "@tanstack/react-query";
 import {
   Drawer,
   DrawerContent,
@@ -32,18 +33,18 @@ import { useUIStore } from "@/lib/stores";
 import { api } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { 
-  Upload, 
-  X, 
-  CheckCircle, 
-  AlertCircle, 
-  FileVideo, 
-  Loader2 
+import {
+  Upload,
+  X,
+  CheckCircle,
+  AlertCircle,
+  FileVideo,
+  Loader2,
+  RefreshCw
 } from "lucide-react";
 
 const uploadSchema = z.object({
   projectId: z.string().min(1, "Project is required"),
-  files: z.array(z.any()).min(1, "At least one file is required"),
 });
 
 type UploadFormData = z.infer<typeof uploadSchema>;
@@ -64,39 +65,57 @@ export function UploadDrawer() {
   const [files, setFiles] = useState<FileWithValidation[]>([]);
   const [dragActive, setDragActive] = useState(false);
 
+  // Load projects from API
+  const { data: projects = [], isLoading: projectsLoading } = useQuery({
+    queryKey: ['projects'],
+    queryFn: api.getProjects,
+  });
+
   const form = useForm<UploadFormData>({
     resolver: zodResolver(uploadSchema),
     defaultValues: {
-      projectId: "proj_default",
-      files: [],
+      projectId: "",
     },
   });
 
-  const projects = [
-    { value: "proj_default", label: "Personal Project" },
-    { value: "proj_work", label: "Work Content" },
-    { value: "proj_social", label: "Social Media" },
-  ];
-
-  // Mock file validation
+  // Real file validation
   const validateFile = useCallback((file: File): Promise<{ valid: boolean; duration?: number; error?: string }> => {
     return new Promise((resolve) => {
-      setTimeout(() => {
-        // Mock validation logic
-        const isVideo = file.type.startsWith('video/');
-        const sizeOk = file.size <= 100 * 1024 * 1024; // 100MB
-        const mockDuration = Math.random() * 25 + 5; // 5-30 seconds
-        
-        if (!isVideo) {
-          resolve({ valid: false, error: 'Not a video file' });
-        } else if (!sizeOk) {
-          resolve({ valid: false, error: 'File too large (max 100MB)' });
-        } else if (mockDuration > 30) {
-          resolve({ valid: false, error: 'Video too long (max 30s)', duration: mockDuration });
+      // Basic validation checks
+      const isVideo = file.type.startsWith('video/');
+      const sizeOk = file.size <= 500 * 1024 * 1024; // 500MB max (same as backend)
+
+      if (!isVideo) {
+        resolve({ valid: false, error: 'Not a video file' });
+        return;
+      }
+
+      if (!sizeOk) {
+        resolve({ valid: false, error: 'File too large (max 500MB)' });
+        return;
+      }
+
+      // Create video element to check duration and dimensions
+      const video = document.createElement('video');
+      const objectUrl = URL.createObjectURL(file);
+
+      video.onloadedmetadata = () => {
+        URL.revokeObjectURL(objectUrl);
+        const duration = video.duration;
+
+        if (duration > 300) { // 5 minutes max
+          resolve({ valid: false, error: 'Video too long (max 5 minutes)', duration });
         } else {
-          resolve({ valid: true, duration: mockDuration });
+          resolve({ valid: true, duration });
         }
-      }, 1000 + Math.random() * 1000); // 1-2 second delay
+      };
+
+      video.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve({ valid: false, error: 'Invalid video file' });
+      };
+
+      video.src = objectUrl;
     });
   }, []);
 
@@ -150,67 +169,119 @@ export function UploadDrawer() {
     setFiles(prev => prev.filter(f => f.id !== id));
   }, []);
 
+  const retryFile = useCallback(async (id: string) => {
+    const fileToRetry = files.find(f => f.id === id);
+    if (!fileToRetry) return;
+
+    // Reset file status to validating and revalidate
+    setFiles(prev => prev.map(f =>
+      f.id === id ? { ...f, status: 'validating', error: undefined, progress: undefined } : f
+    ));
+
+    const validation = await validateFile(fileToRetry.file);
+    setFiles(prev => prev.map(f =>
+      f.id === id ? {
+        ...f,
+        status: validation.valid ? 'valid' : 'invalid',
+        error: validation.error,
+        duration: validation.duration,
+      } : f
+    ));
+  }, [files, validateFile]);
+
   const uploadMutation = useMutation({
     mutationFn: async (data: UploadFormData) => {
+      console.log('Upload mutation started with data:', data);
       const validFiles = files.filter(f => f.status === 'valid');
+      console.log('Processing valid files:', validFiles.length);
       const results = [];
 
       for (const fileObj of validFiles) {
-        // Update file status to uploading
-        setFiles(prev => prev.map(f => 
-          f.id === fileObj.id ? { ...f, status: 'uploading', progress: 0 } : f
-        ));
+        try {
+          // Update status to uploading
+          setFiles(prev => prev.map(f =>
+            f.id === fileObj.id ? { ...f, status: 'uploading', progress: 0 } : f
+          ));
 
-        // Simulate upload progress
-        for (let progress = 0; progress <= 100; progress += 10) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          setFiles(prev => prev.map(f => 
-            f.id === fileObj.id ? { ...f, progress } : f
+          // Create progress callback
+          const onProgress = (progress: number) => {
+            setFiles(prev => prev.map(f =>
+              f.id === fileObj.id ? { ...f, progress } : f
+            ));
+          };
+
+          // Upload the file
+          console.log('Calling api.uploadVideo for file:', fileObj.file.name, 'to project:', data.projectId);
+          const result = await api.uploadVideo(
+            fileObj.file,
+            data.projectId,
+            onProgress
+          );
+          console.log('Upload result:', result);
+
+          setFiles(prev => prev.map(f =>
+            f.id === fileObj.id ? { ...f, status: 'complete', progress: 100 } : f
+          ));
+
+          results.push(result);
+        } catch (error) {
+          console.error('Upload error for file:', fileObj.file.name, error);
+
+          // Mark this file as failed
+          setFiles(prev => prev.map(f =>
+            f.id === fileObj.id ? {
+              ...f,
+              status: 'invalid',
+              error: error instanceof Error ? error.message : 'Upload failed'
+            } : f
           ));
         }
-
-        // Complete upload
-        const result = await api.completeUpload({
-          filename: fileObj.file.name,
-          projectId: data.projectId,
-          duration: fileObj.duration || 15,
-        });
-
-        setFiles(prev => prev.map(f => 
-          f.id === fileObj.id ? { ...f, status: 'complete' } : f
-        ));
-
-        results.push(result);
       }
 
       return results;
     },
     onSuccess: (results) => {
+      const successCount = results.length;
+      const failedCount = files.filter(f => f.status === 'valid').length - successCount;
+
       toast({
         title: "Upload Complete",
-        description: `Successfully uploaded ${results.length} video(s).`,
+        description: successCount > 0
+          ? `Successfully uploaded ${successCount} video(s).${failedCount > 0 ? ` ${failedCount} failed.` : ''}`
+          : "All uploads failed.",
+        variant: failedCount > 0 && successCount === 0 ? "destructive" : "default",
       });
+
       queryClient.invalidateQueries({ queryKey: ["videos"] });
-      
-      // Reset after delay
-      setTimeout(() => {
-        setFiles([]);
-        setUploadDrawerOpen(false);
-        form.reset();
-      }, 2000);
+
+      // Reset after delay if all succeeded
+      if (successCount > 0) {
+        setTimeout(() => {
+          setFiles([]);
+          setUploadDrawerOpen(false);
+          form.reset();
+        }, 2000);
+      }
     },
-    onError: () => {
+    onError: (error) => {
+      console.error('Upload mutation error:', error);
       toast({
         title: "Upload Failed",
-        description: "Something went wrong. Please try again.",
+        description: error instanceof Error ? error.message : "Something went wrong. Please try again.",
         variant: "destructive",
       });
     },
   });
 
   const onSubmit = (data: UploadFormData) => {
+    console.log('Form submitted with data:', data);
+    console.log('Files state:', files);
+
     const validFiles = files.filter(f => f.status === 'valid');
+    console.log('Valid files count:', validFiles.length);
+
     if (validFiles.length === 0) {
+      console.log('No valid files, showing error toast');
       toast({
         title: "No Valid Files",
         description: "Please add at least one valid video file.",
@@ -218,7 +289,8 @@ export function UploadDrawer() {
       });
       return;
     }
-    
+
+    console.log('Starting upload mutation with:', data);
     uploadMutation.mutate(data);
   };
 
@@ -263,31 +335,52 @@ export function UploadDrawer() {
             Upload Videos
           </DrawerTitle>
           <DrawerDescription>
-            Upload video files (max 30 seconds, 100MB each). Supported formats: MP4, MOV, AVI.
+            Upload video files (max 5 minutes, 500MB each). Supported formats: MP4, MOV, AVI, WebM.
           </DrawerDescription>
         </DrawerHeader>
 
         <div className="px-6 pb-6 overflow-y-auto">
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            <form onSubmit={form.handleSubmit(onSubmit, (errors) => {
+              console.log('Form validation errors:', errors);
+            })} className="space-y-6">
               <FormField
                 control={form.control}
                 name="projectId"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Project</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl>
                         <SelectTrigger className="w-[280px]">
-                          <SelectValue placeholder="Select a project" />
+                          <SelectValue
+                            placeholder={
+                              projectsLoading ? "Loading projects..." :
+                              projects.length === 0 ? "No projects available" :
+                              "Select a project"
+                            }
+                          />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {projects.map((project) => (
-                          <SelectItem key={project.value} value={project.value}>
-                            {project.label}
+                        {projectsLoading ? (
+                          <SelectItem value="loading" disabled>
+                            <div className="flex items-center">
+                              <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                              Loading...
+                            </div>
                           </SelectItem>
-                        ))}
+                        ) : projects.length === 0 ? (
+                          <SelectItem value="no-projects" disabled>
+                            No projects available
+                          </SelectItem>
+                        ) : (
+                          projects.map((project) => (
+                            <SelectItem key={project.id} value={project.id}>
+                              {project.name}
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -373,16 +466,30 @@ export function UploadDrawer() {
                           )}
                         </div>
 
-                        {fileObj.status !== 'uploading' && fileObj.status !== 'complete' && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => removeFile(fileObj.id)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        )}
+                        <div className="flex gap-1">
+                          {fileObj.status === 'invalid' && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => retryFile(fileObj.id)}
+                              title="Retry validation"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {fileObj.status !== 'uploading' && fileObj.status !== 'complete' && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeFile(fileObj.id)}
+                              title="Remove file"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -402,6 +509,12 @@ export function UploadDrawer() {
                   type="submit"
                   disabled={uploadMutation.isPending || files.filter(f => f.status === 'valid').length === 0}
                   className="min-w-[120px]"
+                  onClick={() => {
+                    console.log('Upload button clicked');
+                    console.log('Form state:', form.formState);
+                    console.log('Form values:', form.getValues());
+                    console.log('Button disabled?', uploadMutation.isPending || files.filter(f => f.status === 'valid').length === 0);
+                  }}
                 >
                   {uploadMutation.isPending ? (
                     <>

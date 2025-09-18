@@ -6,33 +6,47 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
-import { 
-  Grid3X3, 
-  List, 
-  Kanban, 
+import {
+  Grid3X3,
+  List,
+  Kanban,
   Filter,
   Download,
   Trash2,
   MoreHorizontal,
   Play,
   Search,
-  SortAsc
+  SortAsc,
+  Copy,
+  ExternalLink,
+  Edit3
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useFilterStore, useSelectionStore } from "@/lib/stores";
 import { useNavigate } from "react-router-dom";
+import { useToast } from "@/hooks/use-toast";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { StatusChip } from "@/components/video/StatusChip";
 import { ScoreDial } from "@/components/video/ScoreDial";
+import { VideoEditDialog } from "@/components/dialogs/VideoEditDialog";
 import { Video } from "@/lib/types";
 
 export default function Library() {
   const navigate = useNavigate();
-  const { 
-    viewMode, 
-    setViewMode, 
-    query, 
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const {
+    viewMode,
+    setViewMode,
+    query,
     setQuery,
     status,
     setStatus,
@@ -46,19 +60,21 @@ export default function Library() {
     setProjectId,
     resetFilters
   } = useFilterStore();
-  
-  const { 
-    selectedVideoIds, 
-    toggleSelection, 
+
+  const {
+    selectedVideoIds,
+    toggleSelection,
     clearSelection,
-    selectAll 
+    selectAll
   } = useSelectionStore();
 
   const [showFilters, setShowFilters] = useState(false);
+  const [editVideo, setEditVideo] = useState<Video | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
 
   const { data: videosResponse, isLoading } = useQuery({
     queryKey: ['videos', { query, status, minScore, sortBy, sourceType, projectId }],
-    queryFn: () => api.getVideos({ 
+    queryFn: () => api.getVideos({
       query: query || undefined,
       status: status.length > 0 ? status : undefined,
       minScore: minScore > 0 ? minScore : undefined,
@@ -71,6 +87,47 @@ export default function Library() {
   const videos = videosResponse?.items || [];
   const hasSelection = selectedVideoIds.size > 0;
 
+  // Delete single video mutation
+  const deleteVideoMutation = useMutation({
+    mutationFn: api.deleteVideo,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['videos'] });
+      toast({
+        title: "Video Deleted",
+        description: "Video has been deleted successfully.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Delete Failed",
+        description: error.message || "Failed to delete video.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Bulk delete mutation
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (videoIds: string[]) => {
+      await Promise.all(videoIds.map(id => api.deleteVideo(id)));
+    },
+    onSuccess: (_, videoIds) => {
+      queryClient.invalidateQueries({ queryKey: ['videos'] });
+      clearSelection();
+      toast({
+        title: "Videos Deleted",
+        description: `${videoIds.length} videos have been deleted successfully.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Bulk Delete Failed",
+        description: error.message || "Failed to delete selected videos.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleSelectAll = () => {
     if (hasSelection) {
       clearSelection();
@@ -79,24 +136,61 @@ export default function Library() {
     }
   };
 
+  const handleDeleteVideo = (videoId: string) => {
+    deleteVideoMutation.mutate(videoId);
+  };
+
+  const handleBulkDelete = () => {
+    const selectedIds = Array.from(selectedVideoIds);
+    if (selectedIds.length === 0) return;
+
+    bulkDeleteMutation.mutate(selectedIds);
+  };
+
+  const handleEditVideo = (video: Video) => {
+    setEditVideo(video);
+    setEditDialogOpen(true);
+  };
+
+  const handleCopyLink = (video: Video) => {
+    navigator.clipboard.writeText(`${window.location.origin}/videos/${video.id}`);
+    toast({
+      title: "Link copied",
+      description: "Video link copied to clipboard",
+    });
+  };
+
+  const handleDownload = (video: Video) => {
+    if (video.urls?.mp4) {
+      const link = document.createElement('a');
+      link.href = video.urls.mp4;
+      link.download = `${video.title}.mp4`;
+      link.click();
+    }
+    toast({
+      title: "Download started",
+      description: `Downloading ${video.title}`,
+    });
+  };
+
   const renderVideoCard = (video: Video) => (
-    <Card 
+    <Card
       key={video.id}
-      className="cursor-pointer hover:shadow-md transition-shadow"
-      onClick={() => navigate(`/videos/${video.id}`)}
+      className="cursor-pointer hover:shadow-md transition-shadow group"
     >
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
           <Checkbox
             checked={selectedVideoIds.has(video.id)}
-            onCheckedChange={(checked) => {
-              if (checked) toggleSelection(video.id);
-            }}
+            onCheckedChange={() => toggleSelection(video.id)}
             onClick={(e) => e.stopPropagation()}
           />
-          
-          <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center shrink-0">
-            {video.urls.thumb ? (
+
+          <div
+            className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center shrink-0 cursor-pointer"
+            onClick={() => navigate(`/videos/${video.id}`)}
+          >
+            {video.urls?.thumb ? (
               <img
                 src={video.urls.thumb}
                 alt={video.title}
@@ -106,14 +200,19 @@ export default function Library() {
               <Play className="h-6 w-6 text-muted-foreground" />
             )}
           </div>
-          
-          <div className="flex-1 min-w-0">
+
+          <div
+            className="flex-1 min-w-0 cursor-pointer overflow-hidden"
+            onClick={() => navigate(`/videos/${video.id}`)}
+          >
             <h3 className="font-medium truncate">{video.title}</h3>
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
               <StatusChip status={video.status} />
-              <Badge variant="outline">{video.durationSec}s</Badge>
+              {video.durationSec && (
+                <Badge variant="outline" className="shrink-0">{video.durationSec}s</Badge>
+              )}
               {video.score && (
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1 shrink-0">
                   <ScoreDial value={video.score.overall} size="sm" />
                 </div>
               )}
@@ -122,10 +221,47 @@ export default function Library() {
               {new Date(video.createdAt).toLocaleDateString()}
             </p>
           </div>
-          
-          <Button variant="ghost" size="icon">
-            <MoreHorizontal className="h-4 w-4" />
-          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => navigate(`/videos/${video.id}`)}>
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Open
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleEditVideo(video)}>
+                <Edit3 className="mr-2 h-4 w-4" />
+                Edit
+              </DropdownMenuItem>
+              {video.status === 'ready' && (
+                <DropdownMenuItem onClick={() => handleDownload(video)}>
+                  <Download className="mr-2 h-4 w-4" />
+                  Download
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={() => handleCopyLink(video)}>
+                <Copy className="mr-2 h-4 w-4" />
+                Copy Link
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => handleDeleteVideo(video.id)}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </CardContent>
     </Card>
@@ -221,9 +357,15 @@ export default function Library() {
                 <Download className="mr-2 h-4 w-4" />
                 Download ({selectedVideoIds.size})
               </Button>
-              <Button variant="outline" size="sm" className="flex-1 sm:flex-none">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 sm:flex-none"
+                onClick={handleBulkDelete}
+                disabled={bulkDeleteMutation.isPending}
+              >
                 <Trash2 className="mr-2 h-4 w-4" />
-                Delete
+                Delete ({selectedVideoIds.size})
               </Button>
             </div>
           )}
@@ -357,6 +499,13 @@ export default function Library() {
             {viewMode === 'kanban' && renderKanbanView()}
           </div>
         )}
+
+        {/* Video Edit Dialog */}
+        <VideoEditDialog
+          video={editVideo}
+          open={editDialogOpen}
+          onOpenChange={setEditDialogOpen}
+        />
       </div>
     </AppLayout>
   );

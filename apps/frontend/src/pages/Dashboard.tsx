@@ -160,7 +160,7 @@ export default function Dashboard() {
                   >
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 sm:w-16 sm:h-16 bg-muted rounded-lg flex items-center justify-center shrink-0">
-                        {video.urls.thumb ? (
+                        {video.urls?.thumb ? (
                           <img
                             src={video.urls.thumb}
                             alt={video.title}

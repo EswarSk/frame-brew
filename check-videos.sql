@@ -1,0 +1,1 @@
+SELECT id, title, status, urls FROM videos WHERE status = 'READY';

@@ -13,14 +13,18 @@ export function ScoreDial({
   showLabel = true, 
   className 
 }: ScoreDialProps) {
+  // Handle invalid values (NaN, null, undefined) by defaulting to 0
+  const safeValue = isNaN(value) || value === null || value === undefined ? 0 : Math.max(0, Math.min(100, value));
+  
   const radius = size === 'sm' ? 12 : size === 'md' ? 16 : 20;
   const strokeWidth = size === 'sm' ? 2 : size === 'md' ? 3 : 4;
   const normalizedRadius = radius - strokeWidth * 2;
   const circumference = normalizedRadius * 2 * Math.PI;
   const strokeDasharray = `${circumference} ${circumference}`;
-  const strokeDashoffset = circumference - (value / 100) * circumference;
+  const strokeDashoffset = circumference - (safeValue / 100) * circumference;
   
   const getColor = (score: number) => {
+    if (isNaN(score) || score === null || score === undefined) return 'text-gray-400';
     if (score >= 80) return 'text-green-500';
     if (score >= 60) return 'text-yellow-500';
     if (score >= 40) return 'text-orange-500';
@@ -60,7 +64,7 @@ export function ScoreDial({
           {/* Progress circle */}
           <circle
             stroke="currentColor"
-            className={getColor(value)}
+            className={getColor(safeValue)}
             fill="transparent"
             strokeWidth={strokeWidth}
             strokeDasharray={strokeDasharray}
@@ -77,16 +81,16 @@ export function ScoreDial({
           <span className={cn(
             "font-medium",
             textSize[size],
-            getColor(value)
+            getColor(safeValue)
           )}>
-            {Math.round(value)}
+            {isNaN(value) || value === null || value === undefined ? '-' : Math.round(safeValue)}
           </span>
         </div>
       </div>
       
       {showLabel && size !== 'sm' && (
         <span className="text-sm font-medium">
-          {Math.round(value)}/100
+          {isNaN(value) || value === null || value === undefined ? '-' : Math.round(safeValue)}/100
         </span>
       )}
     </div>

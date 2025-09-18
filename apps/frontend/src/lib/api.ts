@@ -153,6 +153,10 @@ export const api = {
     return client.post<Project>('/api/projects', project);
   },
 
+  async updateProject(id: string, project: { name: string; description?: string }): Promise<Project> {
+    return client.put<Project>(`/api/projects/${id}`, project);
+  },
+
   async deleteProject(id: string): Promise<void> {
     return client.delete<void>(`/api/projects/${id}`);
   },
@@ -204,27 +208,60 @@ export const api = {
   },
 
   async uploadVideo(file: File, projectId?: string, onProgress?: (progress: number) => void): Promise<{ video: Video; uploadId: string }> {
-    const formData = new FormData();
-    formData.append('video', file);
-    if (projectId) {
-      formData.append('projectId', projectId);
-    }
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append('video', file);
+      if (projectId) {
+        formData.append('projectId', projectId);
+      }
 
-    const token = localStorage.getItem('auth_token');
-    const response = await fetch(`${API_URL}/api/upload/video`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-      body: formData,
+      const xhr = new XMLHttpRequest();
+      const token = localStorage.getItem('auth_token');
+
+      // Set up progress tracking
+      if (onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const progress = Math.round((event.loaded / event.total) * 100);
+            onProgress(progress);
+          }
+        };
+      }
+
+      // Handle completion
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            resolve(response);
+          } catch (error) {
+            reject(new Error('Invalid response format'));
+          }
+        } else {
+          try {
+            const errorData = JSON.parse(xhr.responseText);
+            reject(new Error(errorData.message || `HTTP ${xhr.status}: ${xhr.statusText}`));
+          } catch {
+            reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
+          }
+        }
+      };
+
+      // Handle errors
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.ontimeout = () => reject(new Error('Upload timeout'));
+
+      // Set timeout (10 minutes for large files)
+      xhr.timeout = 10 * 60 * 1000;
+
+      // Send request
+      xhr.open('POST', `${API_URL}/api/upload/video`);
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+
+      xhr.send(formData);
     });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ message: 'Upload failed' }));
-      throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    return response.json();
   },
 
   async getUploadProgress(uploadId: string): Promise<{ status: string; progress: number; stage: string; error?: string }> {
@@ -252,6 +289,10 @@ export const api = {
 
   async duplicateAsTemplate(id: string): Promise<Template> {
     return client.post<Template>(`/api/videos/${id}/duplicate-template`);
+  },
+
+  async updateVideo(id: string, data: { title?: string; description?: string; projectId?: string }): Promise<Video> {
+    return client.put<Video>(`/api/videos/${id}`, data);
   },
 
   async deleteVideo(id: string): Promise<void> {

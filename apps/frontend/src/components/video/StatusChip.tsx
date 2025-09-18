@@ -1,30 +1,48 @@
+import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { Status } from "@/lib/types";
+import { VideoStatus } from "@/lib/types";
 import { 
   Clock, 
   Loader2, 
   Film, 
   Target, 
   CheckCircle, 
-  AlertCircle 
+  AlertCircle,
+  Download,
+  Search
 } from "lucide-react";
 
 interface StatusChipProps {
-  status: Status;
+  status: VideoStatus;
   className?: string;
 }
 
-const statusConfig = {
+const statusConfig: Record<VideoStatus, { label: string; variant: 'default' | 'destructive' | 'outline' | 'secondary'; icon: React.ComponentType<{ className?: string }> }> = {
   queued: {
     label: 'Queued',
     variant: 'secondary' as const,
     icon: Clock,
   },
-  running: {
+  processing: {
     label: 'Processing',
     variant: 'secondary' as const,
     icon: Loader2,
+  },
+  running: {
+    label: 'Running',
+    variant: 'secondary' as const,
+    icon: Loader2,
+  },
+  polling: {
+    label: 'Polling',
+    variant: 'secondary' as const,
+    icon: Search,
+  },
+  downloading: {
+    label: 'Downloading',
+    variant: 'secondary' as const,
+    icon: Download,
   },
   transcoding: {
     label: 'Transcoding',
@@ -50,6 +68,20 @@ const statusConfig = {
 
 export function StatusChip({ status, className }: StatusChipProps) {
   const config = statusConfig[status];
+  
+  // Handle unknown status gracefully
+  if (!config) {
+    return (
+      <Badge 
+        variant="outline"
+        className={cn("flex items-center gap-1", className)}
+      >
+        <AlertCircle className="h-3 w-3" />
+        {status || 'Unknown'}
+      </Badge>
+    );
+  }
+  
   const Icon = config.icon;
   
   return (
@@ -59,7 +91,7 @@ export function StatusChip({ status, className }: StatusChipProps) {
     >
       <Icon className={cn(
         "h-3 w-3",
-        status === 'running' && "animate-spin"
+        (status === 'running' || status === 'processing' || status === 'polling' || status === 'downloading') && "animate-spin"
       )} />
       {config.label}
     </Badge>

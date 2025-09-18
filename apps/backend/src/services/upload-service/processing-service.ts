@@ -83,15 +83,16 @@ export class VideoProcessingService {
       }
 
       // Update video status in database
+      const existingMetadata = await this.getVideoMetadata(videoId);
       await db.video.update({
         where: { id: videoId },
         data: {
           status: 'FAILED',
-          metadata: {
-            ...(await this.getVideoMetadata(videoId)),
+          metadata: JSON.stringify({
+            ...existingMetadata,
             error: error.message,
             processingFailedAt: new Date().toISOString(),
-          },
+          }),
         },
       });
 
@@ -148,28 +149,32 @@ export class VideoProcessingService {
     await this.updateProgress(videoId, 100, 'Finalizing');
 
     // Update video record with all processed data
+    const processedUrls = {
+      original: originalUrl,
+      mp4: optimizedVersions.mp4,
+      webm: optimizedVersions.webm,
+      hls: optimizedVersions.hls,
+      thumbnail: thumbnailUrl,
+      preview: previewUrl,
+      audio: audioUrl,
+      captions: captionsUrl,
+    };
+
+    const processedMetadata = {
+      ...metadata,
+      processedAt: new Date().toISOString(),
+      processingDuration: Date.now() - (job.startedAt?.getTime() || 0),
+    };
+
     await db.video.update({
       where: { id: videoId },
       data: {
         status: 'READY',
         durationSec: metadata.duration,
         aspect: this.calculateAspectRatio(metadata.width, metadata.height),
-        urls: {
-          original: originalUrl,
-          mp4: optimizedVersions.mp4,
-          webm: optimizedVersions.webm,
-          hls: optimizedVersions.hls,
-          thumbnail: thumbnailUrl,
-          preview: previewUrl,
-          audio: audioUrl,
-          captions: captionsUrl,
-        },
-        score,
-        metadata: {
-          ...metadata,
-          processedAt: new Date().toISOString(),
-          processingDuration: Date.now() - (job.startedAt?.getTime() || 0),
-        },
+        urls: JSON.stringify(processedUrls),
+        score: typeof score === 'object' ? JSON.stringify(score) : score,
+        metadata: JSON.stringify(processedMetadata),
       },
     });
 
@@ -400,15 +405,35 @@ Content continues...`;
       job.stage = message;
     }
 
+    // Get existing video to merge metadata
+    const existingVideo = await db.video.findUnique({
+      where: { id: videoId },
+      select: { metadata: true },
+    });
+
+    // Parse existing metadata or create new object
+    let existingMetadata = {};
+    if (existingVideo?.metadata) {
+      try {
+        existingMetadata = JSON.parse(existingVideo.metadata);
+      } catch (error) {
+        logger.warn('Failed to parse existing metadata', { videoId, error: error.message });
+      }
+    }
+
+    // Merge with processing progress data
+    const updatedMetadata = {
+      ...existingMetadata,
+      processingProgress: progress,
+      processingStage: message,
+      lastUpdateAt: new Date().toISOString(),
+    };
+
     // Update database
     await db.video.update({
       where: { id: videoId },
       data: {
-        metadata: {
-          processingProgress: progress,
-          processingStage: message,
-          lastUpdateAt: new Date().toISOString(),
-        },
+        metadata: JSON.stringify(updatedMetadata),
       },
     });
 
@@ -431,10 +456,13 @@ Content continues...`;
         return null;
       }
 
+      // Parse metadata JSON string
+      const metadata = typeof video.metadata === 'string' ? JSON.parse(video.metadata) : video.metadata;
+
       return {
-        stage: video.metadata.processingStage || 'Unknown',
-        progress: video.metadata.processingProgress || 0,
-        message: video.metadata.processingStage || 'Processing...',
+        stage: metadata.processingStage || 'Unknown',
+        progress: metadata.processingProgress || 0,
+        message: metadata.processingStage || 'Processing...',
       };
     }
 

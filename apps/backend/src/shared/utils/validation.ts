@@ -13,6 +13,8 @@ export const createVideoSchema = z.object({
 
 export const updateVideoSchema = z.object({
   title: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).optional(),
+  projectId: z.string().optional(),
   status: videoStatusSchema.optional(),
   score: z.object({
     overall: z.number().min(0).max(100),
@@ -85,16 +87,41 @@ export const registerSchema = z.object({
   orgName: z.string().min(1, 'Organization name is required').max(100, 'Organization name too long'),
 });
 
+// Helper to parse query parameters with proper types
+const parseQueryParams = (query: any) => {
+  const parsed = { ...query };
+
+  // Handle status array parameter
+  if (parsed.status && typeof parsed.status === 'string') {
+    parsed.status = parsed.status.split(',').map((s: string) => s.trim());
+  }
+
+  // Handle numeric parameters
+  if (parsed.minScore && typeof parsed.minScore === 'string') {
+    const num = parseFloat(parsed.minScore);
+    parsed.minScore = isNaN(num) ? undefined : num;
+  }
+
+  if (parsed.limit && typeof parsed.limit === 'string') {
+    const num = parseInt(parsed.limit, 10);
+    parsed.limit = isNaN(num) ? undefined : num;
+  }
+
+  return parsed;
+};
+
 // Validation middleware
 export const validate = (schema: z.ZodSchema) => {
   return (req: any, res: any, next: any) => {
     try {
+      const queryData = parseQueryParams(req.query);
+
       const validatedData = schema.parse({
         ...req.body,
-        ...req.query,
+        ...queryData,
         ...req.params,
       });
-      
+
       // Attach validated data to request
       req.validated = validatedData;
       next();

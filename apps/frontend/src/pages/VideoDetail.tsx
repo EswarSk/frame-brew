@@ -12,6 +12,7 @@ import { StatusChip } from "@/components/video/StatusChip";
 import { ScoreDial } from "@/components/video/ScoreDial";
 import { api } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { VideoUrls } from "@/lib/types";
 import { 
   ArrowLeft, 
   Download, 
@@ -28,7 +29,7 @@ import {
   Maximize,
   ExternalLink
 } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 
 export default function VideoDetail() {
   const { id } = useParams<{ id: string }>();
@@ -40,6 +41,59 @@ export default function VideoDetail() {
   const [isMuted, setIsMuted] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoLoading, setVideoLoading] = useState(true);
+
+  // Helper function to validate URL
+  const isValidUrl = (url: string | undefined | null): boolean => {
+    if (!url || typeof url !== 'string' || url.trim() === '') return false;
+    try {
+      new URL(url);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Helper function to get the best available video URL
+  const getVideoUrl = (urls: VideoUrls | string | undefined | null): string | null => {
+    // If it's already a string URL, validate and return it
+    if (typeof urls === 'string') {
+      return isValidUrl(urls) ? urls : null;
+    }
+
+    // If it's an object, parse through the fields
+    if (!urls || typeof urls !== 'object') return null;
+
+    // Try different URL fields in order of preference
+    const urlFields = ['mp4', 'original', 'webm', 'hls'];
+
+    for (const field of urlFields) {
+      const url = urls[field];
+      if (isValidUrl(url)) {
+        return url;
+      }
+    }
+
+    return null;
+  };
+
+  // Helper function to get thumbnail URL
+  const getThumbnailUrl = (urls: VideoUrls | undefined | null): string | null => {
+    if (!urls || typeof urls !== 'object') return null;
+
+    // Try both thumbnail field names
+    const thumbnailFields = ['thumbnail', 'thumb'];
+
+    for (const field of thumbnailFields) {
+      const url = urls[field];
+      if (isValidUrl(url)) {
+        return url;
+      }
+    }
+
+    return null;
+  };
 
   const { data: videoData, isLoading } = useQuery({
     queryKey: ['video', id],
@@ -132,7 +186,20 @@ export default function VideoDetail() {
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
       setDuration(videoRef.current.duration);
+      setVideoLoading(false);
+      setVideoError(null);
     }
+  };
+
+  const handleVideoError = () => {
+    setVideoLoading(false);
+    setVideoError("Failed to load video. The video file may be unavailable or corrupted.");
+    setIsPlaying(false);
+  };
+
+  const handleVideoLoadStart = () => {
+    setVideoLoading(true);
+    setVideoError(null);
   };
 
   const seekTo = (time: number) => {
@@ -210,19 +277,22 @@ export default function VideoDetail() {
           <div className="flex gap-2">
             {video.status === 'ready' && (
               <>
-                {video.urls.mp4 && (
-                  <Button 
-                    variant="outline" 
-                    onClick={() => handleDownload(video.urls.mp4!, `${video.title}.mp4`)}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Download MP4
-                  </Button>
-                )}
-                {video.urls.captions && (
-                  <Button 
-                    variant="outline" 
-                    onClick={() => handleDownload(video.urls.captions!, `${video.title}.vtt`)}
+                {(() => {
+                  const videoUrl = getVideoUrl(video.urls?.original);
+                  return videoUrl ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => handleDownload(videoUrl, `${video.title}.mp4`)}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Download Video
+                    </Button>
+                  ) : null;
+                })()}
+                {video.urls?.captions && (
+                  <Button
+                    variant="outline"
+                    onClick={() => video.urls?.captions && handleDownload(video.urls.captions, `${video.title}.vtt`)}
                   >
                     <Download className="mr-2 h-4 w-4" />
                     Captions
@@ -275,21 +345,63 @@ export default function VideoDetail() {
             <Card>
               <CardContent className="p-0">
                 <div className="relative bg-black rounded-lg overflow-hidden aspect-[9/16] max-h-[600px] mx-auto">
-                  {video.status === 'ready' && video.urls.mp4 ? (
-                    <>
-                      <video
-                        ref={videoRef}
-                        className="w-full h-full object-contain"
-                        src={video.urls.mp4}
-                        onTimeUpdate={handleTimeUpdate}
-                        onLoadedMetadata={handleLoadedMetadata}
-                        onPlay={() => setIsPlaying(true)}
-                        onPause={() => setIsPlaying(false)}
-                        poster={video.urls.thumb}
-                      />
-                      
-                      {/* Video Controls */}
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
+                  {(() => {
+                    const videoUrl = getVideoUrl(video.urls?.original);
+                    const thumbnailUrl = getThumbnailUrl(video.urls);
+
+                    if (video.status === 'ready' && videoUrl) {
+                      return (
+                        <>
+                          <video
+                            ref={videoRef}
+                            className="w-full h-full object-contain"
+                            src={videoUrl}
+                            onTimeUpdate={handleTimeUpdate}
+                            onLoadedMetadata={handleLoadedMetadata}
+                            onLoadStart={handleVideoLoadStart}
+                            onError={handleVideoError}
+                            onPlay={() => setIsPlaying(true)}
+                            onPause={() => setIsPlaying(false)}
+                            poster={thumbnailUrl || undefined}
+                          />
+
+                          {/* Loading overlay */}
+                          {videoLoading && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                              <div className="text-white text-center">
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto mb-2"></div>
+                                <p>Loading video...</p>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Error overlay */}
+                          {videoError && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+                              <div className="text-white text-center p-4">
+                                <ExternalLink className="mx-auto h-12 w-12 mb-4 opacity-50" />
+                                <p className="text-lg mb-2">Video Error</p>
+                                <p className="text-sm opacity-75 max-w-sm">{videoError}</p>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="mt-4 text-white border-white hover:bg-white hover:text-black"
+                                  onClick={() => {
+                                    setVideoError(null);
+                                    if (videoRef.current) {
+                                      videoRef.current.load();
+                                    }
+                                  }}
+                                >
+                                  Retry
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Video Controls */}
+                          {!videoLoading && !videoError && (
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
                         <div className="space-y-2">
                           {/* Progress Bar */}
                           <div 
@@ -366,40 +478,48 @@ export default function VideoDetail() {
                             </Button>
                           </div>
                         </div>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-white">
-                      <div className="text-center">
-                        <Play className="mx-auto h-12 w-12 mb-4 opacity-50" />
-                        <p className="text-lg">
-                          {video.status === 'ready' ? 'No video available' : 'Video processing...'}
-                        </p>
-                        {video.status !== 'ready' && video.status !== 'failed' && (
-                          <Progress value={50} className="w-32 mx-auto mt-4" />
-                        )}
-                      </div>
-                    </div>
-                  )}
+                            </div>
+                          )}
+                        </>
+                      );
+                    } else {
+                      return (
+                        <div className="flex items-center justify-center h-full text-white">
+                          <div className="text-center">
+                            <Play className="mx-auto h-12 w-12 mb-4 opacity-50" />
+                            <p className="text-lg">
+                              {video.status === 'ready' ? 'No video available' : 'Video processing...'}
+                            </p>
+                            {video.status !== 'ready' && video.status !== 'failed' && (
+                              <Progress value={50} className="w-32 mx-auto mt-4" />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+                  })()}
                 </div>
               </CardContent>
             </Card>
 
             {/* Thumbnail Strip */}
-            {video.urls.thumb && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Thumbnail</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <img 
-                    src={video.urls.thumb} 
-                    alt="Video thumbnail"
-                    className="rounded-lg w-full max-w-xs"
-                  />
-                </CardContent>
-              </Card>
-            )}
+            {(() => {
+              const thumbnailUrl = getThumbnailUrl(video.urls);
+              return thumbnailUrl ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Thumbnail</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <img
+                      src={thumbnailUrl}
+                      alt="Video thumbnail"
+                      className="rounded-lg w-full max-w-xs"
+                    />
+                  </CardContent>
+                </Card>
+              ) : null;
+            })()}
           </div>
 
           {/* Sidebar */}
@@ -410,7 +530,7 @@ export default function VideoDetail() {
                 <CardHeader>
                   <CardTitle className="flex items-center justify-between">
                     Quality Score
-                    <ScoreDial value={video.score.overall} size={60} />
+                    <ScoreDial value={video.score.overall} size="lg" />
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -591,29 +711,32 @@ export default function VideoDetail() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {video.urls.mp4 && (
-                    <div className="flex items-center justify-between p-3 border rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-blue-100 rounded-lg">
-                          <ExternalLink className="h-4 w-4 text-blue-600" />
+                  {(() => {
+                    const videoUrl = getVideoUrl(video.urls?.original);
+                    return videoUrl ? (
+                      <div className="flex items-center justify-between p-3 border rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-blue-100 rounded-lg">
+                            <ExternalLink className="h-4 w-4 text-blue-600" />
+                          </div>
+                          <div>
+                            <p className="font-medium">Video File</p>
+                            <p className="text-sm text-muted-foreground">High quality download</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-medium">Video File (MP4)</p>
-                          <p className="text-sm text-muted-foreground">High quality download</p>
-                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDownload(videoUrl, `${video.title}.mp4`)}
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Download
+                        </Button>
                       </div>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => handleDownload(video.urls.mp4!, `${video.title}.mp4`)}
-                      >
-                        <Download className="mr-2 h-4 w-4" />
-                        Download
-                      </Button>
-                    </div>
-                  )}
+                    ) : null;
+                  })()}
                   
-                  {video.urls.captions && (
+                  {video.urls?.captions && (
                     <div className="flex items-center justify-between p-3 border rounded-lg">
                       <div className="flex items-center gap-3">
                         <div className="p-2 bg-green-100 rounded-lg">
@@ -624,10 +747,10 @@ export default function VideoDetail() {
                           <p className="text-sm text-muted-foreground">Subtitle file</p>
                         </div>
                       </div>
-                      <Button 
-                        variant="outline" 
+                      <Button
+                        variant="outline"
                         size="sm"
-                        onClick={() => handleDownload(video.urls.captions!, `${video.title}.vtt`)}
+                        onClick={() => video.urls?.captions && handleDownload(video.urls.captions, `${video.title}.vtt`)}
                       >
                         <Download className="mr-2 h-4 w-4" />
                         Download
@@ -635,27 +758,30 @@ export default function VideoDetail() {
                     </div>
                   )}
                   
-                  {video.urls.thumb && (
-                    <div className="flex items-center justify-between p-3 border rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-purple-100 rounded-lg">
-                          <ExternalLink className="h-4 w-4 text-purple-600" />
+                  {(() => {
+                    const thumbnailUrl = getThumbnailUrl(video.urls);
+                    return thumbnailUrl ? (
+                      <div className="flex items-center justify-between p-3 border rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-purple-100 rounded-lg">
+                            <ExternalLink className="h-4 w-4 text-purple-600" />
+                          </div>
+                          <div>
+                            <p className="font-medium">Thumbnail</p>
+                            <p className="text-sm text-muted-foreground">Preview image</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-medium">Thumbnail (JPG)</p>
-                          <p className="text-sm text-muted-foreground">Preview image</p>
-                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDownload(thumbnailUrl, `${video.title}_thumb.jpg`)}
+                        >
+                          <Download className="mr-2 h-4 w-4" />
+                          Download
+                        </Button>
                       </div>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => handleDownload(video.urls.thumb!, `${video.title}_thumb.jpg`)}
-                      >
-                        <Download className="mr-2 h-4 w-4" />
-                        Download
-                      </Button>
-                    </div>
-                  )}
+                    ) : null;
+                  })()}
                 </div>
               </CardContent>
             </Card>

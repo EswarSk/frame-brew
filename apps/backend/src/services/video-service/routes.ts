@@ -69,36 +69,18 @@ router.get('/videos', validate(getVideosSchema), async (req, res) => {
       where.sourceType = sourceType.toUpperCase();
     }
 
-    if (minScore !== undefined) {
-      where.score = {
-        path: ['overall'],
-        gte: minScore,
-      };
-    }
+    // Note: We'll filter by minScore after fetching since score is stored as JSON string
 
-    // Handle cursor-based pagination
-    const cursorCondition = cursor ? {
-      cursor: { id: cursor },
-      skip: 1,
-    } : {};
-
-    // Build order by clause
+    // Build order by clause (note: score sorting will be done after fetching)
     let orderBy: any;
     switch (sortBy) {
       case 'oldest':
         orderBy = { createdAt: 'asc' };
         break;
       case 'score-high':
-        orderBy = [
-          { score: { path: ['overall'], sort: 'desc' } },
-          { createdAt: 'desc' }
-        ];
-        break;
       case 'score-low':
-        orderBy = [
-          { score: { path: ['overall'], sort: 'asc' } },
-          { createdAt: 'desc' }
-        ];
+        // We'll sort by score after fetching since it's stored as JSON string
+        orderBy = { createdAt: 'desc' };
         break;
       case 'title-az':
         orderBy = { title: 'asc' };
@@ -107,32 +89,71 @@ router.get('/videos', validate(getVideosSchema), async (req, res) => {
         orderBy = { createdAt: 'desc' };
     }
 
-    // Get videos
+    // Get videos (fetch more if we need to filter by score)
+    const fetchLimit = minScore !== undefined ? limit * 3 : limit; // Fetch more if filtering by score
     const videos = await db.video.findMany({
       where,
-      ...cursorCondition,
-      take: limit + 1, // Take one extra to check if there are more
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      take: fetchLimit + 1, // Take one extra to check if there are more
       orderBy,
       include: {
         project: true,
       },
     });
 
-    // Check if there are more results
-    const hasMore = videos.length > limit;
-    if (hasMore) {
-      videos.pop(); // Remove the extra item
+    // Filter by minScore if specified (since score is stored as JSON string)
+    let filteredVideos = videos;
+    if (minScore !== undefined) {
+      filteredVideos = videos.filter(video => {
+        if (!video.score) return false;
+        try {
+          const scoreObj = JSON.parse(video.score);
+          return scoreObj.overall >= minScore;
+        } catch {
+          return false;
+        }
+      });
     }
 
-    const nextCursor = hasMore && videos.length > 0 
-      ? videos[videos.length - 1].id 
+    // Sort by score if requested (since we can't do it in the query)
+    if (sortBy === 'score-high' || sortBy === 'score-low') {
+      filteredVideos.sort((a, b) => {
+        let scoreA = 0, scoreB = 0;
+        try {
+          const scoreObjA = a.score ? JSON.parse(a.score) : null;
+          const scoreObjB = b.score ? JSON.parse(b.score) : null;
+          scoreA = scoreObjA?.overall || 0;
+          scoreB = scoreObjB?.overall || 0;
+        } catch {
+          // Keep default scores of 0
+        }
+
+        if (sortBy === 'score-high') {
+          return scoreB - scoreA; // Descending
+        } else {
+          return scoreA - scoreB; // Ascending
+        }
+      });
+    }
+
+    // Limit the results to the requested amount
+    const limitedVideos = filteredVideos.slice(0, limit);
+
+    // Check if there are more results
+    const hasMore = filteredVideos.length > limit;
+
+    // For simplicity, we'll use index-based pagination when filtering by score
+    // In a production app, you'd want cursor-based pagination that works with post-filtering
+
+    const nextCursor = hasMore && limitedVideos.length > 0
+      ? limitedVideos[limitedVideos.length - 1].id
       : undefined;
 
-    // Get total count for first page
-    const total = !cursor ? await db.video.count({ where }) : undefined;
+    // Get total count for first page (simplified for filtered results)
+    const total = !cursor ? (minScore !== undefined ? filteredVideos.length : await db.video.count({ where })) : undefined;
 
     const response: VideosResponse = {
-      items: videos.map(transformVideoToApi),
+      items: limitedVideos.map(transformVideoToApi),
       nextCursor,
       total: total ?? 0,
     };
@@ -335,6 +356,40 @@ router.post('/projects', validate(createProjectSchema), async (req, res) => {
     res.status(500).json({
       code: 'PROJECT_CREATE_FAILED',
       message: 'Failed to create project',
+    });
+  }
+});
+
+// Update project
+router.put('/projects/:id', validate(createProjectSchema), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const orgId = req.user.orgId;
+
+    // Check if project exists and belongs to user's org
+    const existingProject = await db.project.findUnique({
+      where: { id, orgId },
+    });
+
+    if (!existingProject) {
+      return res.status(404).json({
+        code: 'PROJECT_NOT_FOUND',
+        message: 'Project not found',
+      });
+    }
+
+    const updatedProject = await db.project.update({
+      where: { id },
+      data: req.validated,
+    });
+
+    logger.info('Project updated', { projectId: id, userId: req.user.userId });
+    res.json(transformProjectToApi(updatedProject));
+  } catch (error) {
+    logger.error('Update project error', { error, projectId: req.params.id });
+    res.status(500).json({
+      code: 'PROJECT_UPDATE_FAILED',
+      message: 'Failed to update project',
     });
   }
 });

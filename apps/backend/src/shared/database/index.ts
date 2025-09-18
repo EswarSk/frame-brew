@@ -57,22 +57,38 @@ export const withTransaction = async <T>(
   return await db.$transaction(callback);
 };
 
+// Helper function to safely parse JSON fields
+const parseJSONField = (field: any, fallback: any = null) => {
+  if (typeof field === 'string') {
+    try {
+      return JSON.parse(field);
+    } catch (error) {
+      logger.warn('Failed to parse JSON field', { field, error: error.message });
+      return fallback;
+    }
+  }
+  return field || fallback;
+};
+
 // Database transformers to convert Prisma models to API types
 export const transformVideoToApi = (video: any) => ({
   id: video.id,
   orgId: video.orgId,
   projectId: video.projectId,
   title: video.title,
+  description: video.description,
   status: video.status.toLowerCase(),
   sourceType: video.sourceType.toLowerCase(),
   durationSec: video.durationSec,
   aspect: video.aspect,
   createdAt: video.createdAt.toISOString(),
   updatedAt: video.updatedAt.toISOString(),
-  urls: video.urls || {},
-  score: video.score,
+  urls: parseJSONField(video.urls, {}),
+  score: parseJSONField(video.score, null),
+  metadata: parseJSONField(video.metadata, {}),
   feedbackSummary: video.feedbackSummary,
   version: video.version,
+  project: video.project ? transformProjectToApi(video.project) : undefined,
 });
 
 export const transformJobToApi = (job: any) => ({

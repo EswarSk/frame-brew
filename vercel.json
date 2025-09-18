@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "name": "framebrew",
+  "builds": [
+    {
+      "src": "apps/frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist",
+        "framework": "vite"
+      }
+    },
+    {
+      "src": "apps/backend/src/index.ts",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["apps/backend/prisma/**"]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "apps/backend/src/index.ts"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "apps/frontend/dist/$1"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "functions": {
+    "apps/backend/src/index.ts": {
+      "maxDuration": 60
+    }
+  },
+  "outputDirectory": "apps/frontend/dist"
+}

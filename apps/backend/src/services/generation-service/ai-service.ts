@@ -1,16 +1,9 @@
 import { logger } from '../../shared/utils/logger';
-import AWS from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
 import { veo3Client, Veo3GenerationRequest } from './veo3-client';
-
-// Configure AWS S3
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-  region: process.env.AWS_REGION || 'us-east-1',
-});
-
-const BUCKET_NAME = process.env.AWS_S3_BUCKET || 'frame-brew-videos';
+import { GCSService } from '../upload-service/gcs-service';
+import { promises as fs } from 'fs';
+import path from 'path';
 
 interface GenerationRequest {
   prompt: string;
@@ -160,22 +153,31 @@ export class AIGenerationService {
   static async pollGenerationStatus(operationName: string): Promise<{
     status: 'pending' | 'running' | 'completed' | 'failed';
     progress?: number;
-    videoUrl?: string;
+    videoUrl?: any; // Changed to any to handle file references
     error?: string;
   }> {
     try {
       const result = await veo3Client.pollGenerationStatus(operationName);
       
+      logger.debug('Veo3 polling result', {
+        operationName,
+        status: result.status,
+        progress: result.progress,
+        hasVideoUrl: !!result.videoUrl,
+        videoUrlType: typeof result.videoUrl
+      });
+      
       return {
         status: result.status.toLowerCase() as any,
         progress: result.progress,
-        videoUrl: result.videoUrl,
+        videoUrl: result.videoUrl, // This can now be a file reference or URL
         error: result.error
       };
     } catch (error) {
       logger.error('Failed to poll Veo3 generation status', { 
         operationName,
-        error: error.message 
+        error: error.message,
+        stack: error.stack
       });
       
       return {
@@ -189,43 +191,51 @@ export class AIGenerationService {
    * Download and store completed Veo3 video
    */
   static async downloadAndStoreVideo(
-    videoId: string, 
-    videoUrl: string
+    videoId: string,
+    videoFile: any, // Can be a file reference or URL string
+    orgId: string = 'default'
   ): Promise<string> {
     try {
-      logger.info('Downloading Veo3 video', { videoId, videoUrl });
-
-      // Download video from Veo3
-      const videoBuffer = await veo3Client.downloadVideo(videoUrl);
-
-      // Upload to S3
-      const key = `videos/${videoId}/veo3-generated.mp4`;
-      
-      const uploadResult = await s3.upload({
-        Bucket: BUCKET_NAME,
-        Key: key,
-        Body: videoBuffer,
-        ContentType: 'video/mp4',
-        Metadata: {
-          videoId,
-          source: 'veo3',
-          originalUrl: videoUrl,
-        },
-      }).promise();
-
-      logger.info('Veo3 video stored successfully', { 
+      logger.info('Downloading Veo3 video', {
         videoId,
-        s3Url: uploadResult.Location,
-        size: videoBuffer.length
+        videoFileType: typeof videoFile,
+        isString: typeof videoFile === 'string'
       });
 
-      return uploadResult.Location;
+      // Download video from Veo3 using the updated method signature
+      const videoBuffer = await veo3Client.downloadVideo(videoFile, videoId);
 
-    } catch (error) {
-      logger.error('Failed to download and store Veo3 video', { 
+      // Store video in GCS
+      const key = `generated/${orgId}/${videoId}/video.mp4`;
+      const videoUrl = await GCSService.uploadProcessedFile(
+        videoBuffer,
+        key,
+        'video/mp4',
+        {
+          'video-id': videoId,
+          'type': 'generated',
+          'source': 'veo3',
+          'org-id': orgId,
+          'generated-at': new Date().toISOString(),
+        }
+      );
+
+      logger.info('Veo3 video stored in GCS', {
         videoId,
         videoUrl,
-        error: error.message 
+        size: videoBuffer.length,
+        sizeKB: Math.round(videoBuffer.length / 1024),
+        sizeMB: Math.round(videoBuffer.length / (1024 * 1024))
+      });
+
+      return videoUrl;
+
+    } catch (error) {
+      logger.error('Failed to download and store Veo3 video', {
+        videoId,
+        videoFile: typeof videoFile === 'string' ? videoFile : '[File Reference]',
+        error: error.message,
+        stack: error.stack
       });
       throw error;
     }
@@ -235,27 +245,28 @@ export class AIGenerationService {
    * Process and optimize generated video
    */
   static async processVideo(
-    generationResult: GenerationResult, 
-    options: ProcessingOptions
+    generationResult: GenerationResult,
+    options: ProcessingOptions,
+    orgId: string = 'default'
   ): Promise<ProcessedVideo> {
     const { url, id, duration } = generationResult;
     const { captions, watermark } = options;
 
-    logger.info('Starting video processing', { videoId: id, options });
+    logger.info('Starting video processing', { videoId: id, options, orgId });
 
     // Simulate processing time
     await this.simulateProcessing(3000, 'Video optimization');
 
     // Generate thumbnail
-    const thumbnailUrl = await this.generateThumbnail(id, url);
+    const thumbnailUrl = await this.generateThumbnail(id, url, orgId);
 
     // Generate HLS for streaming (optional)
-    const hlsUrl = await this.generateHLS(id, url);
+    const hlsUrl = await this.generateHLS(id, url, orgId);
 
     // Generate captions if requested
     let captionsUrl: string | undefined;
     if (captions) {
-      captionsUrl = await this.generateCaptions(id, url);
+      captionsUrl = await this.generateCaptions(id, url, orgId);
     }
 
     // Apply watermark if requested
@@ -278,84 +289,134 @@ export class AIGenerationService {
       },
     };
 
-    logger.info('Video processing completed', { videoId: id });
+    logger.info('Video processing completed', { videoId: id, orgId });
     return result;
   }
 
   /**
    * Create mock video file for MVP
    */
-  private static async createMockVideo(videoId: string, durationSec: number): Promise<string> {
-    // For MVP, we'll upload a placeholder video to S3
-    // In production, this would be the actual AI-generated video
-    
+  private static async createMockVideo(videoId: string, durationSec: number, orgId: string = 'default'): Promise<string> {
+    // For MVP, we'll create a placeholder video
+    // This is used as fallback when Veo3 generation fails
+
     const mockVideoBuffer = Buffer.from('MOCK_VIDEO_DATA_' + videoId);
-    const key = `videos/${videoId}/generated.mp4`;
 
     try {
-      const uploadResult = await s3.upload({
-        Bucket: BUCKET_NAME,
-        Key: key,
-        Body: mockVideoBuffer,
-        ContentType: 'video/mp4',
-        Metadata: {
-          duration: durationSec.toString(),
-          generated: 'true',
-          videoId,
-        },
-      }).promise();
+      // Store mock video in GCS
+      const key = `generated/${orgId}/${videoId}/video.mp4`;
+      const videoUrl = await GCSService.uploadProcessedFile(
+        mockVideoBuffer,
+        key,
+        'video/mp4',
+        {
+          'video-id': videoId,
+          'type': 'mock',
+          'source': 'fallback',
+          'org-id': orgId,
+          'duration': durationSec.toString(),
+        }
+      );
 
-      return uploadResult.Location;
+      logger.info('Mock video created in GCS', {
+        videoId,
+        videoUrl,
+        duration: durationSec,
+        size: mockVideoBuffer.length
+      });
+
+      return videoUrl;
+
     } catch (error) {
-      logger.error('Failed to upload mock video', { error, videoId });
-      // Return a placeholder URL if S3 fails
-      return `https://placeholder.com/video/${videoId}.mp4`;
+      logger.error('Failed to create mock video', { error, videoId });
+      // Return expected GCS URL even if creation fails
+      return `https://storage.googleapis.com/${process.env.GCS_BUCKET_NAME || 'frame-brew-videos'}/generated/${orgId}/${videoId}/video.mp4`;
     }
   }
 
   /**
    * Generate thumbnail from video
    */
-  private static async generateThumbnail(videoId: string, videoUrl: string): Promise<string> {
+  private static async generateThumbnail(videoId: string, videoUrl: string, orgId: string = 'default'): Promise<string> {
     await this.simulateProcessing(1000, 'Thumbnail generation');
 
-    // For MVP, create a mock thumbnail
-    const mockThumbnailBuffer = Buffer.from('MOCK_THUMBNAIL_DATA_' + videoId);
-    const key = `videos/${videoId}/thumbnail.jpg`;
-
     try {
-      const uploadResult = await s3.upload({
-        Bucket: BUCKET_NAME,
-        Key: key,
-        Body: mockThumbnailBuffer,
-        ContentType: 'image/jpeg',
-        Metadata: {
-          videoId,
-          type: 'thumbnail',
-        },
-      }).promise();
+      // For MVP, create a mock thumbnail
+      const mockThumbnailBuffer = Buffer.from('MOCK_THUMBNAIL_DATA_' + videoId);
 
-      return uploadResult.Location;
+      // Store thumbnail in GCS
+      const key = `generated/${orgId}/${videoId}/thumbnail.jpg`;
+      const thumbnailUrl = await GCSService.uploadProcessedFile(
+        mockThumbnailBuffer,
+        key,
+        'image/jpeg',
+        {
+          'video-id': videoId,
+          'type': 'thumbnail',
+          'source': 'ai-generated',
+          'org-id': orgId,
+        }
+      );
+
+      logger.info('Thumbnail generated and stored in GCS', {
+        videoId,
+        thumbnailUrl,
+        size: mockThumbnailBuffer.length
+      });
+
+      return thumbnailUrl;
+
     } catch (error) {
-      logger.error('Failed to upload thumbnail', { error, videoId });
-      return `https://placeholder.com/thumbnail/${videoId}.jpg`;
+      logger.error('Failed to generate thumbnail', { error, videoId });
+      // Return expected GCS path pattern even if failed
+      return `https://storage.googleapis.com/${process.env.GCS_BUCKET_NAME || 'frame-brew-videos'}/generated/${orgId}/${videoId}/thumbnail.jpg`;
     }
   }
 
   /**
    * Generate HLS streaming format
    */
-  private static async generateHLS(videoId: string, videoUrl: string): Promise<string> {
+  private static async generateHLS(videoId: string, videoUrl: string, orgId: string = 'default'): Promise<string> {
     await this.simulateProcessing(2000, 'HLS generation');
 
-    // For MVP, return a mock HLS URL
-    return `https://${BUCKET_NAME}.s3.amazonaws.com/videos/${videoId}/playlist.m3u8`;
+    try {
+      // For MVP, create a mock HLS playlist
+      const mockPlaylist = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXT-X-MEDIA-SEQUENCE:0
+#EXTINF:10.0,
+segment_0.ts
+#EXTINF:10.0,
+segment_1.ts
+#EXT-X-ENDLIST`;
+
+      // Store HLS playlist in GCS
+      const key = `generated/${orgId}/${videoId}/playlist.m3u8`;
+      const hlsUrl = await GCSService.uploadProcessedFile(
+        Buffer.from(mockPlaylist),
+        key,
+        'application/x-mpegURL',
+        {
+          'video-id': videoId,
+          'type': 'hls',
+          'source': 'ai-generated',
+          'org-id': orgId,
+        }
+      );
+
+      return hlsUrl;
+    } catch (error) {
+      logger.error('Failed to generate HLS', { error, videoId });
+      // Return expected GCS path pattern even if failed
+      return `https://storage.googleapis.com/${process.env.GCS_BUCKET_NAME || 'frame-brew-videos'}/generated/${orgId}/${videoId}/playlist.m3u8`;
+    }
   }
 
   /**
    * Generate captions/subtitles
    */
-  private static async generateCaptions(videoId: string, videoUrl: string): Promise<string> {
+  private static async generateCaptions(videoId: string, videoUrl: string, orgId: string = 'default'): Promise<string> {
     await this.simulateProcessing(1500, 'Caption generation');
 
     // Create mock captions
@@ -370,24 +431,34 @@ This is a mock caption for the generated video.
 00:00:10.000 --> 00:00:15.000
 AI-generated content continues...`;
 
-    const key = `videos/${videoId}/captions.vtt`;
-
     try {
-      const uploadResult = await s3.upload({
-        Bucket: BUCKET_NAME,
-        Key: key,
-        Body: mockCaptions,
-        ContentType: 'text/vtt',
-        Metadata: {
-          videoId,
-          type: 'captions',
-        },
-      }).promise();
+      // Store captions in GCS
+      const key = `generated/${orgId}/${videoId}/captions.vtt`;
+      const captionsUrl = await GCSService.uploadProcessedFile(
+        Buffer.from(mockCaptions, 'utf8'),
+        key,
+        'text/vtt',
+        {
+          'video-id': videoId,
+          'type': 'captions',
+          'source': 'ai-generated',
+          'org-id': orgId,
+          'language': 'en',
+        }
+      );
 
-      return uploadResult.Location;
+      logger.info('Captions generated and stored in GCS', {
+        videoId,
+        captionsUrl,
+        size: mockCaptions.length
+      });
+
+      return captionsUrl;
+
     } catch (error) {
-      logger.error('Failed to upload captions', { error, videoId });
-      return `https://placeholder.com/captions/${videoId}.vtt`;
+      logger.error('Failed to generate captions', { error, videoId });
+      // Return expected GCS path pattern even if failed
+      return `https://storage.googleapis.com/${process.env.GCS_BUCKET_NAME || 'frame-brew-videos'}/generated/${orgId}/${videoId}/captions.vtt`;
     }
   }
 

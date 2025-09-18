@@ -294,9 +294,9 @@ router.post('/jobs/:id/retry', async (req, res) => {
       orgId,
       // Veo3 specific parameters from original job
       negativePrompt: job.negativePrompt,
-      aspectRatio: job.aspectRatio,
-      resolution: job.resolution,
-      model: job.model,
+      aspectRatio: job.aspectRatio as "16:9" | "9:16",
+      resolution: job.resolution as "720p" | "1080p",
+      model: job.model as "stable" | "fast",
     });
 
     logger.info('Generation job retried', { jobId: id, userId: req.user.userId });
@@ -442,9 +442,9 @@ router.post('/videos/:id/rerender', async (req, res) => {
       orgId,
       // Copy Veo3 parameters from original job
       negativePrompt: lastJob.negativePrompt,
-      aspectRatio: lastJob.aspectRatio,
-      resolution: lastJob.resolution,
-      model: lastJob.model,
+      aspectRatio: lastJob.aspectRatio as "16:9" | "9:16",
+      resolution: lastJob.resolution as "720p" | "1080p",
+      model: lastJob.model as "stable" | "fast",
     });
 
     logger.info('Video rerendering started', { 

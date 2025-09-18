@@ -2,13 +2,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { 
-  MoreHorizontal, 
-  Play, 
-  Download, 
-  Trash2, 
+import {
+  MoreHorizontal,
+  Play,
+  Download,
+  Trash2,
   Copy,
-  ExternalLink
+  ExternalLink,
+  Edit3
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -28,9 +29,10 @@ interface VideoCardProps {
   video: Video;
   onDelete?: (id: string) => void;
   onDownload?: (id: string) => void;
+  onEdit?: (video: Video) => void;
 }
 
-export function VideoCard({ video, onDelete, onDownload }: VideoCardProps) {
+export function VideoCard({ video, onDelete, onDownload, onEdit }: VideoCardProps) {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { selectedVideoIds, toggleSelection } = useSelectionStore();
@@ -98,6 +100,10 @@ export function VideoCard({ video, onDelete, onDownload }: VideoCardProps) {
                   <ExternalLink className="mr-2 h-4 w-4" />
                   Open
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onEdit?.(video)}>
+                  <Edit3 className="mr-2 h-4 w-4" />
+                  Edit
+                </DropdownMenuItem>
                 {video.status === 'ready' && (
                   <DropdownMenuItem onClick={handleDownload}>
                     <Download className="mr-2 h-4 w-4" />
@@ -141,8 +147,10 @@ export function VideoCard({ video, onDelete, onDownload }: VideoCardProps) {
             
             <div className="flex items-center gap-2 flex-wrap">
               <StatusChip status={video.status} />
-              <Badge variant="outline">{video.durationSec}s</Badge>
-              <Badge variant="outline" className="capitalize">
+              {video.durationSec && (
+                <Badge variant="outline" className="shrink-0">{video.durationSec}s</Badge>
+              )}
+              <Badge variant="outline" className="capitalize shrink-0">
                 {video.sourceType}
               </Badge>
             </div>

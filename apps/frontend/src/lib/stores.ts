@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
-import { ViewMode, ID } from './types';
+import { ViewMode, ID, GetVideosParams } from './types';
 
 interface UIStore {
   sidebarOpen: boolean;
@@ -58,8 +58,8 @@ interface FilterStore {
   setSourceType: (type: 'generated' | 'uploaded' | '') => void;
   minScore: number;
   setMinScore: (score: number) => void;
-  sortBy: string;
-  setSortBy: (sort: string) => void;
+  sortBy: NonNullable<GetVideosParams['sortBy']>;
+  setSortBy: (sort: NonNullable<GetVideosParams['sortBy']>) => void;
   tags: string[];
   setTags: (tags: string[]) => void;
   resetFilters: () => void;
